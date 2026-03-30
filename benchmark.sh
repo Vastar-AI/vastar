@@ -1,8 +1,8 @@
 #!/bin/bash
-# jude vs hey — comprehensive benchmark
+# vastar vs hey — comprehensive benchmark
 set -e
 
-JUDE="$(dirname "$0")/target/release/jude"
+VASTAR="$(dirname "$0")/target/release/vastar"
 HEY="/home/abraham/.local/bin/hey"
 SERVER="$(dirname "$0")/bench-server/target/release/bench-server"
 PORT=9977
@@ -25,7 +25,7 @@ get_n() {
 }
 
 echo "================================================================"
-echo "  jude vs hey — Comprehensive Benchmark"
+echo "  vastar vs hey — Comprehensive Benchmark"
 echo "  $(date)"
 echo "  Machine: $(nproc) cores, $(free -h | awk '/Mem:/{print $2}') RAM"
 echo "  FD limit: $(ulimit -n)"
@@ -48,7 +48,7 @@ for pi in "${!PAYLOADS[@]}"; do
     URL="http://localhost:$PORT/"
 
     printf "%-8s | %-12s %-12s | %-10s %-10s | %-10s %-10s | %-10s %-10s | %-8s %-8s\n" \
-        "conc" "hey_rps" "jude_rps" "hey_p50" "jude_p50" "hey_p99" "jude_p99" "hey_mem" "jude_mem" "hey_err" "jude_err"
+        "conc" "hey_rps" "vastar_rps" "hey_p50" "vastar_p50" "hey_p99" "vastar_p99" "hey_mem" "vastar_mem" "hey_err" "vastar_err"
     echo "---------|------------------------------|----------------------|----------------------|----------------------|-----------------"
 
     for c in "${CONCURRENCIES[@]}"; do
@@ -66,18 +66,18 @@ for pi in "${!PAYLOADS[@]}"; do
 
         hey_mem=$(/usr/bin/time -v $HEY -n $n -c $c $URL 2>&1 | grep "Maximum resident" | awk '{print $NF}')
 
-        # Run jude
-        jude_out=$($JUDE -n $n -c $c $URL 2>/dev/null)
-        jude_rps=$(echo "$jude_out" | grep "Requests/sec" | awk '{print $2}')
-        jude_p50=$(echo "$jude_out" | grep "50% in" | awk '{print $3}')
-        jude_p99=$(echo "$jude_out" | grep "99% in" | awk '{print $3}')
-        jude_err_line=$(echo "$jude_out" | grep "Errors:" | awk '{print $2}')
-        jude_err=${jude_err_line:-0}
+        # Run vastar
+        vastar_out=$($VASTAR -n $n -c $c $URL 2>/dev/null)
+        vastar_rps=$(echo "$vastar_out" | grep "Requests/sec" | awk '{print $2}')
+        vastar_p50=$(echo "$vastar_out" | grep "50% in" | awk '{print $3}')
+        vastar_p99=$(echo "$vastar_out" | grep "99% in" | awk '{print $3}')
+        vastar_err_line=$(echo "$vastar_out" | grep "Errors:" | awk '{print $2}')
+        vastar_err=${vastar_err_line:-0}
 
-        jude_mem=$(/usr/bin/time -v $JUDE -n $n -c $c $URL 2>&1 | grep "Maximum resident" | awk '{print $NF}')
+        vastar_mem=$(/usr/bin/time -v $VASTAR -n $n -c $c $URL 2>&1 | grep "Maximum resident" | awk '{print $NF}')
 
         printf "%-8s | %-12s %-12s | %-10s %-10s | %-10s %-10s | %-10s %-10s | %-8s %-8s\n" \
-            "c=$c" "$hey_rps" "$jude_rps" "${hey_p50}s" "${jude_p50}s" "${hey_p99}s" "${jude_p99}s" "${hey_mem}KB" "${jude_mem}KB" "$hey_err" "$jude_err"
+            "c=$c" "$hey_rps" "$vastar_rps" "${hey_p50}s" "${vastar_p50}s" "${hey_p99}s" "${vastar_p99}s" "${hey_mem}KB" "${vastar_mem}KB" "$hey_err" "$vastar_err"
     done
 
     echo ""
@@ -92,6 +92,6 @@ echo "================================================================"
 echo "  Binary size comparison"
 echo "================================================================"
 echo "  hey:  $(ls -lh $HEY | awk '{print $5}')"
-echo "  jude: $(ls -lh $JUDE | awk '{print $5}')"
+echo "  vastar: $(ls -lh $VASTAR | awk '{print $5}')"
 echo ""
 echo "Done."

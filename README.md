@@ -1,61 +1,101 @@
-# jude
+# vastar
 
-HTTP load generator. Fast, zero-copy, Rust.
+HTTP load generator. Fast, zero-copy, Rust. Alternative to hey, oha, wrk.
 
 ```
-$ jude -n 20000 -c 1000 http://localhost:8080/
+$ vastar -n 3000 -c 500 -m POST -T "application/json" -d '{"prompt":"bench"}' http://localhost:4545/v1/chat/completions
 
 Summary:
-  Total:        0.0374 secs
-  Slowest:      0.0089 secs
-  Fastest:      0.0000 secs
-  Average:      0.0012 secs
-  Requests/sec: 534891.02
+  Total:        0.3251 secs
+  Slowest:      0.0978 secs
+  Fastest:      0.0016 secs
+  Average:      0.0474 secs
+  Requests/sec: 9229.24
+  Total data:   174078167 bytes
+  Size/request: 58026 bytes
 
-Latency distribution:
-  50% in 0.0008 secs
-  95% in 0.0046 secs
-  99% in 0.0065 secs
+Response time distribution:
+  10.00% in 0.0243 secs
+  25.00% in 0.0327 secs
+  50.00% in 0.0461 secs  (46.06ms)
+  75.00% in 0.0627 secs
+  90.00% in 0.0741 secs
+  95.00% in 0.0811 secs  (81.09ms)
+  99.00% in 0.0892 secs  (89.22ms)
+  99.90% in 0.0951 secs  (95.07ms)
+  99.99% in 0.0978 secs
+
+  Insight:
+    Latency spread p99/p50 = 1.9x -- good consistency
+    Tail ratio p99/p95 = 1.1x -- clean tail
+    Outlier ratio p99.9/p99 = 1.1x -- no significant outliers
+
+Response time histogram:        (11-level SLO color gradient)
+  0.0016 [42]   ███
+  0.0103 [82]   ██████
+  0.0191 [361]  ███████████████████████████
+  0.0278 [630]  ████████████████████████████████████████████████
+  0.0366 [364]  ███████████████████████████
+  0.0453 [362]  ███████████████████████████
+  0.0541 [415]  ██████████████████████████████
+  0.0628 [364]  ███████████████████████████
+  0.0716 [213]  ████████████████
+  0.0803 [137]  ██████████
+  0.0891 [30]   ██
 
 Status code distribution:
-  [200] 20000 responses
+  [200] 3000 responses
+
+Details (average, fastest, slowest):
+  req write:    0.0000 secs, 0.0000 secs, 0.0014 secs
+  resp wait:    0.0226 secs, 0.0007 secs, 0.0482 secs
+  resp read:    0.0248 secs, 0.0008 secs, 0.0583 secs
 ```
 
-## Why jude
+## Why vastar
 
-|  | jude | hey | oha |
+|  | vastar | hey | oha |
 |---|---|---|---|
-| Language | Rust | Go | Rust |
+| Language | Rust (raw TCP) | Go | Rust (hyper) |
 | Binary | **1.2 MB** | 9 MB | 20 MB |
-| RPS (c=1000) | **537K** | 107K | 18K |
-| Memory (c=1000) | **32 MB** | 80 MB | 41 MB |
+| RPS c=1 | **91K** | 41K | 72K |
+| RPS c=500 | **415K** | 114K | 219K |
+| RPS c=1000 | **414K** | 65K | 18K |
+| RPS c=5000 | **354K** | 53K | 23K |
+| Memory c=1000 | **32 MB** | 78 MB | 42 MB |
 
-jude is a drop-in replacement for [hey](https://github.com/rakyll/hey) with the same CLI flags. At high concurrency (c=500+) it is **3-8x faster** while using **2-4x less memory**.
+At high concurrency (c=500+) vastar is **3-8x faster** than hey while using **2-4x less memory**.
 
-See [BENCHMARK.md](BENCHMARK.md) for full comparison with hey and oha across 10 concurrency levels and 4 payload sizes.
+See [BENCHMARK.md](BENCHMARK.md) for full comparison across 10 concurrency levels and 4 payload sizes.
+
+## Features
+
+- **11-level SLO color histogram** — ANSI 256-color gradient (dark green to dark red) mapped to percentile thresholds
+- **Automated Insight** — latency spread, tail ratio, outlier detection from p50/p95/p99/p99.9
+- **Key percentile highlights** — p50, p95, p99, p99.9 annotated with colored (ms) values
+- **Phase timing Details** — req write, resp wait, resp read breakdown (like hey)
+- **Live progress bar** — ASCII-only, terminal-aware, no emoji, no aggressive clear screen
+- **Chunked transfer** — supports Content-Length and Transfer-Encoding: chunked (SSE/streaming)
 
 ## Install
 
 ```bash
-cargo install jude
+cargo install vastar
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/Vastar-AI/jude.git
-cd jude
+git clone https://github.com/Vastar-AI/vastar.git
+cd vastar
 cargo build --release
-# Binary at ./target/release/jude (1.2 MB)
+# Binary at ./target/release/vastar (1.2 MB)
 ```
 
 ## Usage
 
 ```
-Usage: jude [OPTIONS] <URL>
-
-Arguments:
-  <URL>  Target URL
+Usage: vastar [OPTIONS] <URL>
 
 Options:
   -n <REQUESTS>              Number of requests [default: 200]
@@ -70,7 +110,6 @@ Options:
   -t <TIMEOUT>               Timeout in seconds [default: 20]
   -A <ACCEPT>                Accept header
   -a <AUTH>                  Basic auth (user:pass)
-  -o <OUTPUT>                Output type (csv)
       --disable-keepalive    Disable keep-alive
       --disable-compression  Disable compression
       --disable-redirects    Disable redirects
@@ -82,56 +121,72 @@ Options:
 
 ```bash
 # Simple GET
-jude http://localhost:8080/
+vastar http://localhost:8080/
 
 # POST with JSON body
-jude -m POST -T "application/json" -d '{"key":"value"}' http://localhost:8080/api
+vastar -m POST -T "application/json" -d '{"key":"value"}' http://localhost:8080/api
 
 # 10000 requests, 500 concurrent
-jude -n 10000 -c 500 http://localhost:8080/
+vastar -n 10000 -c 500 http://localhost:8080/
 
 # Duration mode: run for 30 seconds
-jude -z 30s -c 200 http://localhost:8080/
+vastar -z 30s -c 200 http://localhost:8080/
 
 # Custom headers
-jude -H "Authorization: Bearer token" -H "X-Custom: value" http://localhost:8080/
+vastar -H "Authorization: Bearer token" -H "X-Custom: value" http://localhost:8080/
 
 # Basic auth
-jude -a user:pass http://localhost:8080/
+vastar -a user:pass http://localhost:8080/
 
 # Body from file
-jude -m POST -T "application/json" -D payload.json http://localhost:8080/api
+vastar -m POST -T "application/json" -D payload.json http://localhost:8080/api
 ```
 
 ## Architecture
 
 ```
-                CLI (clap)
-                    |
-                Coordinator
-                    |
-        +-----------+-----------+
-        |           |           |
-    Worker 0    Worker 1    Worker N     <- clamp(C/128, 1, cpus*2)
-        |           |           |
-   FuturesUnordered x ~128 conns each
-        |           |           |
-    Raw TCP     Raw TCP     Raw TCP      <- hand-crafted HTTP/1.1
+              CLI (clap)
+                  |
+            +-----+-----+
+            | Coordinator |
+            +-----+-----+
+                  |
+    Phase 0: Pre-connect (semaphore, max 256 concurrent)
+                  |
+    Phase 1: Distribute connections to workers
+                  |
+        +---------+---------+---------+
+        |         |         |         |
+    Worker 0  Worker 1  ...  Worker N      <- clamp(C/128, 1, cpus*2)
+        |         |         |         |
+   +----+----+   ...       ...       ...
+   |    |    |
+  Conn Conn Conn   <- FuturesUnordered event loop
+   |    |    |         per worker (~128 conns each)
+   |    |    |
+  Raw TCP streams  <- hand-crafted HTTP/1.1
+   |    |    |
+   +----+----+
+        |
+   BufReader 32KB <- synchronous header parse
+        |              fill_buf() + consume() body drain
+        |
+   AtomicU64 progress <- lock-free, 10 FPS render
 ```
 
-**Key design decisions:**
+### How it works
 
-- **Raw TCP** instead of hyper/reqwest. Request bytes are pre-built once and written directly to `TcpStream`. Response headers are parsed synchronously from `BufReader`'s buffer. No HTTP framework overhead.
+1. **Pre-connect phase.** All C connections are established in parallel before the benchmark starts. A semaphore limits to 256 concurrent connects to avoid TCP backlog overflow.
 
-- **Adaptive worker topology.** Workers scale as `clamp(C/128, 1, cpus*2)`. Each worker manages ~128 connections via `FuturesUnordered`. This keeps tokio scheduler overhead bounded while maximizing I/O parallelism.
+2. **Adaptive worker topology.** Workers scale as `clamp(C/128, 1, cpus*2)`. At c=50 that's 1 worker. At c=500 that's 4 workers. At c=5000 that's 32 workers (capped at cpus*2). Each worker runs a FuturesUnordered event loop managing ~128 connections. The tokio scheduler sees N workers (not C tasks) — drastically less scheduling overhead at high concurrency.
 
-- **Pre-connect with rate limiting.** All TCP connections are established before the benchmark starts, limited to 256 concurrent connects to avoid TCP backlog overflow.
+3. **Raw TCP request.** HTTP/1.1 request bytes are pre-built once at startup (`method + path + headers + body`). Each request is a single `write_all()` of pre-built `Bytes` (Arc-backed, zero-copy clone). No per-request allocation, no header map construction, no URI parsing.
 
-- **Zero-copy request sharing.** Request bytes use `bytes::Bytes` (Arc-backed). `Bytes::clone()` is a pointer increment, not a copy.
+4. **Synchronous response parsing.** One `fill_buf()` call gets data into BufReader's 32KB buffer. Headers are parsed synchronously from buffered data (find `\r\n\r\n`, scan for `Content-Length`/`Transfer-Encoding`). Body is drained via `fill_buf()` + `consume()` — no per-response allocation. Chunked transfer encoding is handled inline.
 
-- **Drain-in-place body reading.** Response bodies are consumed via `fill_buf()` + `consume()` through BufReader's existing 32KB buffer. No per-response allocation.
+5. **Phase timing.** Each request measures write time, wait-for-first-byte time, and read time separately. These are accumulated per-worker (sum/min/max) and merged once at the end — no per-request timing allocation.
 
-- **Lock-free progress.** Live progress uses `AtomicU64` counters read at 10 FPS. Workers only do `fetch_add(1, Relaxed)` per request. ASCII-only display, no emoji, no aggressive clear screen.
+6. **SLO color histogram.** 11 histogram buckets mapped to 11 ANSI 256-color levels via the color cube path: `(0,1,0)→(0,4,0)→(1,5,0)→(5,5,0)→(5,1,0)→(4,0,0)→(2,0,0)` (dark green through yellow to dark red). Color only emitted when stdout is a terminal.
 
 ## Dependencies
 
