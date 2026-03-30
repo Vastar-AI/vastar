@@ -80,7 +80,14 @@ See [BENCHMARK.md](BENCHMARK.md) for full comparison across 10 concurrency level
 ## Install
 
 ```bash
+# One-line install (Linux/macOS, auto-detects platform)
+curl -sSf https://raw.githubusercontent.com/Vastar-AI/vastar/main/install.sh | sh
+
+# Or via Cargo
 cargo install vastar
+
+# Or via Homebrew
+brew tap Vastar-AI/tap && brew install vastar
 ```
 
 Or build from source:
