@@ -189,7 +189,7 @@ pub fn print_report(r: &BenchResult) {
             let bar_len = bucket.count * bar_max / max_count;
             if use_color {
                 let (color, _) = slo_color(bucket.mark, &r.percentiles);
-                let bar = "\u{2588}".repeat(bar_len);
+                let bar = "\u{25A0}".repeat(bar_len);
                 println!("  {:.4} [{}]\t{}{}{}", bucket.mark, bucket.count, color, bar, RESET);
             } else {
                 let bar = "#".repeat(bar_len);
