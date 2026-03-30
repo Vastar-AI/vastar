@@ -25,23 +25,24 @@ Response time distribution:
   99.90% in 0.0951 secs  (95.07ms)
   99.99% in 0.0978 secs
 
-  Insight:
-    Latency spread p99/p50 = 1.9x -- good consistency
-    Tail ratio p99/p95 = 1.1x -- clean tail
-    Outlier ratio p99.9/p99 = 1.1x -- no significant outliers
-
 Response time histogram:        (11-level SLO color gradient)
-  0.0016 [42]   ███
-  0.0103 [82]   ██████
-  0.0191 [361]  ███████████████████████████
-  0.0278 [630]  ████████████████████████████████████████████████
-  0.0366 [364]  ███████████████████████████
-  0.0453 [362]  ███████████████████████████
-  0.0541 [415]  ██████████████████████████████
-  0.0628 [364]  ███████████████████████████
-  0.0716 [213]  ████████████████
-  0.0803 [137]  ██████████
-  0.0891 [30]   ██
+  0.0016 [42]   ■■■
+  0.0103 [82]   ■■■■■■
+  0.0191 [361]  ■■■■■■■■■■■■■■■■■■■■■■■■■■■
+  0.0278 [630]  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+  0.0366 [364]  ■■■■■■■■■■■■■■■■■■■■■■■■■■■
+  0.0453 [362]  ■■■■■■■■■■■■■■■■■■■■■■■■■■■
+  0.0541 [415]  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+  0.0628 [364]  ■■■■■■■■■■■■■■■■■■■■■■■■■■■
+  0.0716 [213]  ■■■■■■■■■■■■■■■■
+  0.0803 [137]  ■■■■■■■■■■
+  0.0891 [30]   ■■
+
+  SLO:
+  ██ elite      <=16.3ms    ██ excellent  <=32.7ms    ██ good       <=46.1ms
+  ██ normal     <=62.7ms    ██ acceptable <=74.1ms    ██ degraded   <=81.1ms
+  ██ slow       <=89.2ms    ██ very slow  <=134ms     ██ critical   <=178ms
+  ██ severe     <=268ms     ██ violation  >268ms
 
 Status code distribution:
   [200] 3000 responses
@@ -50,6 +51,11 @@ Details (average, fastest, slowest):
   req write:    0.0000 secs, 0.0000 secs, 0.0014 secs
   resp wait:    0.0226 secs, 0.0007 secs, 0.0482 secs
   resp read:    0.0248 secs, 0.0008 secs, 0.0583 secs
+
+Insight:
+  Latency spread p99/p50 = 1.9x -- good consistency
+  Tail ratio p99/p95 = 1.1x -- clean tail
+  Outlier ratio p99.9/p99 = 1.1x -- no significant outliers
 ```
 
 ## Why vastar
