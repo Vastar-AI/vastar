@@ -10,6 +10,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -70,65 +71,53 @@ jobs:
           7z a ../../../vastar-${{ github.ref_name }}-${{ matrix.target }}.zip vastar.exe
           cd ../../..
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload to release directly
+        uses: softprops/action-gh-release@v2
         with:
-          name: vastar-${{ matrix.target }}
-          path: vastar-${{ github.ref_name }}-${{ matrix.target }}.*
+          files: vastar-${{ github.ref_name }}-${{ matrix.target }}.*
 
-  release:
-    name: Create Release
+  checksums:
+    name: Generate checksums
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Generate checksums
+      - name: Download release assets
         run: |
-          cd artifacts
-          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} . \;
+          TAG=${{ github.ref_name }}
+          gh release download "$TAG" --repo Vastar-AI/vastar --dir assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Generate and upload SHA256SUMS
+        run: |
+          cd assets
           sha256sum vastar-* > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Create GitHub Release
+      - name: Upload checksums to release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
-          files: |
-            artifacts/vastar-*
-            artifacts/SHA256SUMS.txt
+          files: assets/SHA256SUMS.txt
 
   homebrew:
     name: Update Homebrew tap
-    needs: release
+    needs: checksums
     runs-on: ubuntu-latest
     steps:
-      - name: Get release info
-        id: info
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-
       - name: Download checksums
         run: |
           TAG=${{ github.ref_name }}
-          curl -sL "https://github.com/Vastar-AI/vastar/releases/download/${TAG}/SHA256SUMS.txt" -o sums.txt
-          cat sums.txt
+          gh release download "$TAG" --repo Vastar-AI/vastar --pattern "SHA256SUMS.txt"
+          cat SHA256SUMS.txt
+        env:
+          GH_TOKEN: ${{ github.token }}
 
-          LINUX_SHA=$(grep 'x86_64-unknown-linux-gnu' sums.txt | awk '{print $1}')
-          MAC_INTEL_SHA=$(grep 'x86_64-apple-darwin' sums.txt | awk '{print $1}')
-          MAC_ARM_SHA=$(grep 'aarch64-apple-darwin' sums.txt | awk '{print $1}')
-
-          echo "linux_sha=$LINUX_SHA" >> "$GITHUB_OUTPUT"
-          echo "mac_intel_sha=$MAC_INTEL_SHA" >> "$GITHUB_OUTPUT"
-          echo "mac_arm_sha=$MAC_ARM_SHA" >> "$GITHUB_OUTPUT"
+      - name: Parse checksums
         id: shas
+        run: |
+          echo "linux=$(grep 'x86_64-unknown-linux-gnu' SHA256SUMS.txt | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "mac_intel=$(grep 'x86_64-apple-darwin' SHA256SUMS.txt | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "mac_arm=$(grep 'aarch64-apple-darwin' SHA256SUMS.txt | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
       - name: Checkout homebrew-tap
         uses: actions/checkout@v4
@@ -139,13 +128,12 @@ jobs:
 
       - name: Update formula
         run: |
-          VERSION=${{ steps.info.outputs.version }}
-          TAG=${{ steps.info.outputs.tag }}
+          TAG=${{ github.ref_name }}
+          VERSION="${TAG#v}"
           BASE="https://github.com/Vastar-AI/vastar/releases/download/${TAG}"
-
-          cat > homebrew-tap/Formula/vastar.rb << FORMULA
+          cat > homebrew-tap/Formula/vastar.rb << EOF
           class Vastar < Formula
-            desc "HTTP load generator. Fast, zero-copy, raw TCP. Alternative to hey, oha, wrk."
+            desc "HTTP load generator. Fast, zero-copy, raw TCP."
             homepage "https://github.com/Vastar-AI/vastar"
             version "${VERSION}"
             license "MIT"
@@ -153,16 +141,16 @@ jobs:
             on_macos do
               if Hardware::CPU.arm?
                 url "${BASE}/vastar-${TAG}-aarch64-apple-darwin.tar.gz"
-                sha256 "${{ steps.shas.outputs.mac_arm_sha }}"
+                sha256 "${{ steps.shas.outputs.mac_arm }}"
               else
                 url "${BASE}/vastar-${TAG}-x86_64-apple-darwin.tar.gz"
-                sha256 "${{ steps.shas.outputs.mac_intel_sha }}"
+                sha256 "${{ steps.shas.outputs.mac_intel }}"
               end
             end
 
             on_linux do
               url "${BASE}/vastar-${TAG}-x86_64-unknown-linux-gnu.tar.gz"
-              sha256 "${{ steps.shas.outputs.linux_sha }}"
+              sha256 "${{ steps.shas.outputs.linux }}"
             end
 
             def install
@@ -173,7 +161,7 @@ jobs:
               assert_match "vastar", shell_output("#{bin}/vastar --version")
             end
           end
-          FORMULA
+          EOF
 
       - name: Push formula
         run: |
@@ -181,5 +169,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/vastar.rb
-          git commit -m "vastar ${{ steps.info.outputs.version }}"
+          git commit -m "vastar ${GITHUB_REF_NAME#v}"
           git push
