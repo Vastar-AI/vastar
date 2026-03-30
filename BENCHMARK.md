@@ -108,31 +108,36 @@
 
 ## Analysis
 
-### Where vastar dominates
+### Important caveats
 
-- **c=1 (single connection):** 2-2.4x faster than hey, 1.3-1.5x faster than oha. Raw TCP + synchronous buffer parsing has minimal per-request overhead.
-- **c=500+:** vastar pulls away dramatically. At c=1000, vastar achieves **537K RPS** vs hey's 107K (5x) and oha's 18K (29x). The adaptive worker topology with FuturesUnordered event loop scales where others don't.
-- **Memory at all levels:** vastar consistently uses 2-4x less memory than hey and oha. At c=10000 with 100KB payload, vastar uses 329 MB vs oha's 1.5 GB.
+- All benchmarks run on **localhost loopback** — kernel bypasses the network stack. Production results over real networks will differ significantly due to TCP round-trip, congestion, and packet loss.
+- The server is a **zero-processing mock** — it returns a fixed response immediately. Real application servers have processing time that dwarfs tool overhead differences.
+- **Throughput differences between tools reflect tool overhead**, not server capacity. The `resp wait` metric (server-side latency) is consistent across all tools for the same server.
+- Results are from a **single machine** (16 cores, 31 GB RAM). Different hardware will produce different absolute numbers, though relative patterns should hold.
 
-### Where oha dominates
+### Observations by concurrency range
 
-- **c=10-200 (low-mid concurrency):** oha is fastest thanks to hyper's optimized connection pool and HTTP parsing. The overhead of hyper's abstraction layers pays off at moderate concurrency where connection reuse patterns are optimal.
+**c=1-200 (low to moderate):** oha shows highest throughput in this range, particularly with larger payloads. hyper's connection pool and HTTP parsing are well-optimized for moderate connection reuse patterns. hey performs consistently across all scenarios. vastar shows highest single-connection throughput (c=1) due to minimal per-request overhead.
 
-### Where hey holds
+**c=500+ (high concurrency):** vastar shows highest throughput. hey maintains stable performance. oha's throughput decreases significantly — this appears related to per-connection task scheduling overhead, though we have not verified oha's internals to confirm the exact cause.
 
-- **c=200 with 100KB payload:** hey's Go net/http client is well-tuned for this middle ground. But it never exceeds 150K RPS in any scenario.
+**100KB payload at c=200:** hey shows slightly higher throughput than vastar and oha. Go's net/http client handles this combination well.
 
-### Why oha collapses at c=500+
+### Memory usage
 
-oha (like the earlier hyper-based vastar) uses hyper-util's connection pool with one tokio task per connection. At c=500+, tokio scheduler overhead for thousands of tasks becomes the bottleneck. This is the same cliff vastar had before switching to raw TCP + FuturesUnordered.
+vastar uses less memory than hey across all concurrency levels (roughly 2-3x less). At c=10,000 with 100KB payload, oha uses significantly more memory (1,477 MB) compared to vastar (329 MB) and hey (581 MB). Memory differences are primarily due to per-connection buffer allocation strategies.
 
-### Why vastar scales
+### vastar architecture notes
 
-1. **Raw TCP** — no HTTP framework overhead, hand-crafted request bytes, synchronous header parsing from BufReader
-2. **Adaptive FuturesUnordered** — `clamp(C/128, 1, cpus*2)` workers, each managing ~128 connections. Single-digit workers = minimal scheduler overhead. FuturesUnordered polls connections within each worker without involving the tokio scheduler.
-3. **Pre-connect with rate limiting** — all connections established before benchmark starts, limited to 256 concurrent connects to avoid TCP backlog overflow
-4. **Zero-copy request** — `Bytes::clone()` is Arc increment, request bytes built once and shared across all workers
-5. **Drain-in-place body reading** — `fill_buf()` + `consume()` drains response body through BufReader's existing buffer, no allocation per response
+vastar's approach differs from hey and oha in several ways:
+
+1. **Raw TCP** — no HTTP framework. Request bytes are hand-crafted and written directly to TcpStream. This reduces per-request overhead but means vastar only supports HTTP/1.1 (no HTTP/2).
+2. **Adaptive worker topology** — workers scale as `clamp(C/128, 1, cpus*2)`. Each worker manages connections via FuturesUnordered. This trades complexity for reduced scheduler overhead at high concurrency.
+3. **Pre-connect** — all connections established before timing starts, rate-limited to 256 concurrent. This measures sustained throughput, not connection establishment.
+4. **Zero-copy request** — `Bytes::clone()` is an Arc increment. Request bytes built once and shared.
+5. **Drain-in-place** — response bodies consumed via `fill_buf()` + `consume()` through BufReader's existing buffer.
+
+These choices optimize for high-concurrency throughput but mean vastar is **not the best tool for every scenario**. For HTTP/2 testing, use oha or h2load. For scripted multi-step scenarios, use k6 or Gatling. For moderate concurrency with large payloads, hey or oha may produce more representative results.
 
 ## Reproducing
 
