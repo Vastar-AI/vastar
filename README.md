@@ -69,13 +69,28 @@ Insight:
 |---|---|---|---|
 | Language | Rust (raw TCP) | Go | Rust (hyper) |
 | Binary | **1.2 MB** | 9 MB | 20 MB |
-| RPS c=1 | **91K** | 41K | 72K |
-| RPS c=500 | **415K** | 114K | 219K |
-| RPS c=1000 | **414K** | 65K | 18K |
-| RPS c=5000 | **354K** | 53K | 23K |
-| Memory c=1000 | **32 MB** | 78 MB | 42 MB |
 
-At high concurrency (c=500+) vastar is **3-8x faster** than hey while using **2-4x less memory**.
+### Throughput (0B payload, requests/sec)
+
+| Concurrency | vastar | hey | oha | Winner |
+|---|---|---|---|---|
+| c=1 | **93,192** | 40,942 | 71,750 | vastar 2.3x vs hey |
+| c=10 | 226,650 | 145,607 | **320,712** | oha |
+| c=200 | 220,311 | 132,650 | **240,421** | oha |
+| c=500 | **408,117** | 71,695 | 234,676 | vastar 1.7x vs oha |
+| c=1,000 | **536,758** | 106,861 | 18,329 | vastar 5x vs hey |
+| c=5,000 | **372,191** | 64,443 | 14,196 | vastar 5.8x vs hey |
+| c=10,000 | **336,700** | 61,427 | 38,141 | vastar 5.5x vs hey |
+
+### Memory (0B payload, Peak RSS)
+
+| Concurrency | vastar | hey | oha |
+|---|---|---|---|
+| c=1 | **4 MB** | 13 MB | 15 MB |
+| c=1,000 | **32 MB** | 80 MB | 41 MB |
+| c=10,000 | **284 MB** | 492 MB | 212 MB |
+
+At c=1000: vastar **537K RPS** — 5x faster than hey, 30x faster than oha. Memory 2-5x smaller across all levels.
 
 See [BENCHMARK.md](BENCHMARK.md) for full comparison across 10 concurrency levels and 4 payload sizes.
 
