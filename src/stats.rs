@@ -12,10 +12,10 @@ pub struct BenchResult {
     pub avg_latency: f64,
     pub min_latency: f64,
     pub max_latency: f64,
+    pub concurrency: usize,
     pub percentiles: Percentiles,
     pub histogram: Vec<HistBucket>,
     pub status_dist: HashMap<u16, usize>,
-    // Phase timing details (average, fastest, slowest) in seconds
     pub details: PhaseDetails,
 }
 
@@ -49,7 +49,7 @@ pub struct PhaseStat {
     pub max: f64,
 }
 
-pub fn aggregate(results: Vec<WorkerResult>, elapsed: Duration) -> BenchResult {
+pub fn aggregate(results: Vec<WorkerResult>, elapsed: Duration, concurrency: usize) -> BenchResult {
     let total_errors: u64 = results.iter().map(|r| r.errors).sum();
     let total_bytes: u64 = results.iter().map(|r| r.bytes_recv).sum();
 
@@ -98,6 +98,7 @@ pub fn aggregate(results: Vec<WorkerResult>, elapsed: Duration) -> BenchResult {
             avg_latency: 0.0,
             min_latency: 0.0,
             max_latency: 0.0,
+            concurrency,
             percentiles: Percentiles {
                 p10: 0.0, p25: 0.0, p50: 0.0, p75: 0.0,
                 p90: 0.0, p95: 0.0, p99: 0.0, p999: 0.0, p9999: 0.0,
@@ -140,7 +141,7 @@ pub fn aggregate(results: Vec<WorkerResult>, elapsed: Duration) -> BenchResult {
         total_duration: elapsed,
         total_requests, total_errors, total_bytes,
         rps, avg_latency: avg_lat, min_latency: min_lat, max_latency: max_lat,
-        percentiles, histogram, status_dist, details,
+        concurrency, percentiles, histogram, status_dist, details,
     }
 }
 

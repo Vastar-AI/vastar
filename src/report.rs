@@ -177,10 +177,6 @@ pub fn print_report(r: &BenchResult) {
         }
     }
 
-    // Insight — automated performance diagnosis from key ratios
-    if use_color {
-        print_insight(&r.percentiles, r.rps);
-    }
     println!();
 
     // Histogram — 11-level SLO color gradient
@@ -226,53 +222,87 @@ pub fn print_report(r: &BenchResult) {
         println!("Errors: {} total", r.total_errors);
         println!();
     }
+
+    // Insight — last, after all data
+    let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    if use_color {
+        print_insight(&r.percentiles, r.rps, r.concurrency, r.avg_latency);
+    }
+    println!();
 }
 
-fn print_insight(p: &Percentiles, _rps: f64) {
-    let p95_p50 = if p.p50 > 0.0 { p.p95 / p.p50 } else { 1.0 };
+fn print_insight(p: &Percentiles, rps: f64, concurrency: usize, avg_latency: f64) {
     let p99_p95 = if p.p95 > 0.0 { p.p99 / p.p95 } else { 1.0 };
     let p999_p99 = if p.p99 > 0.0 { p.p999 / p.p99 } else { 1.0 };
     let spread = if p.p50 > 0.0 { p.p99 / p.p50 } else { 1.0 };
+    let p95_p50 = if p.p50 > 0.0 { p.p95 / p.p50 } else { 1.0 };
 
-    println!();
-    println!("  Insight:");
+    println!("Insight:");
 
     // Overall latency consistency
     if spread <= 1.5 {
-        println!("    Latency spread p99/p50 = {:.1}x -- excellent consistency", spread);
+        println!("  Latency spread p99/p50 = {:.1}x -- excellent consistency", spread);
     } else if spread <= 3.0 {
-        println!("    Latency spread p99/p50 = {:.1}x -- good consistency", spread);
+        println!("  Latency spread p99/p50 = {:.1}x -- good consistency", spread);
     } else if spread <= 5.0 {
-        println!("    Latency spread p99/p50 = {:.1}x -- moderate variance", spread);
+        println!("  Latency spread p99/p50 = {:.1}x -- moderate variance", spread);
     } else {
-        println!("    Latency spread p99/p50 = {:.1}x -- high variance, investigate slow path", spread);
+        println!("  Latency spread p99/p50 = {:.1}x -- high variance, investigate slow path", spread);
     }
 
     // Tail latency analysis
     if p99_p95 > 2.0 {
-        println!("    Tail ratio p99/p95 = {:.1}x -- tail latency problem (>2x)", p99_p95);
+        println!("  Tail ratio p99/p95 = {:.1}x -- tail latency problem (>2x)", p99_p95);
     } else if p99_p95 > 1.5 {
-        println!("    Tail ratio p99/p95 = {:.1}x -- mild tail latency", p99_p95);
+        println!("  Tail ratio p99/p95 = {:.1}x -- mild tail latency", p99_p95);
     } else {
-        println!("    Tail ratio p99/p95 = {:.1}x -- clean tail", p99_p95);
+        println!("  Tail ratio p99/p95 = {:.1}x -- clean tail", p99_p95);
     }
 
     // Severe outlier detection
     if p999_p99 > 3.0 {
-        println!("    Outlier ratio p99.9/p99 = {:.1}x -- severe outliers (>3x), check GC/infra", p999_p99);
+        println!("  Outlier ratio p99.9/p99 = {:.1}x -- severe outliers (>3x), check GC/infra", p999_p99);
     } else if p999_p99 > 2.0 {
-        println!("    Outlier ratio p99.9/p99 = {:.1}x -- outliers present", p999_p99);
+        println!("  Outlier ratio p99.9/p99 = {:.1}x -- outliers present", p999_p99);
     } else {
-        println!("    Outlier ratio p99.9/p99 = {:.1}x -- no significant outliers", p999_p99);
+        println!("  Outlier ratio p99.9/p99 = {:.1}x -- no significant outliers", p999_p99);
     }
 
     // Head-of-line blocking / queuing
     if p95_p50 > 3.0 {
-        println!("    Queue ratio p95/p50 = {:.1}x -- queuing/contention detected (>3x)", p95_p50);
+        println!("  Queue ratio p95/p50 = {:.1}x -- queuing/contention detected (>3x)", p95_p50);
     } else if p95_p50 > 2.0 {
-        println!("    Queue ratio p95/p50 = {:.1}x -- mild queuing", p95_p50);
+        println!("  Queue ratio p95/p50 = {:.1}x -- mild queuing", p95_p50);
     }
 
+    // Sweet spot concurrency (Little's Law: C = λ × W)
+    if rps > 0.0 && avg_latency > 0.0 {
+        let sweet_c = (rps * p.p95).round() as usize;
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        let c = concurrency;
+
+        println!();
+        println!("  Sweet spot concurrency (Little's Law):");
+        println!("    C = RPS x p95_latency = {:.0} x {:.4}s = ~{}", rps, p.p95, sweet_c);
+        println!("    Machine: {} cores, client-side measurement", cpus);
+
+        let lo = (sweet_c as f64 * 0.7) as usize;
+        let hi = (sweet_c as f64 * 1.3) as usize;
+
+        if c > sweet_c * 2 {
+            println!("    Status: OVER-SATURATED -- reduce to ~{} for optimal throughput", sweet_c);
+        } else if c > hi {
+            println!("    Status: SLIGHTLY HIGH -- current c={}, consider ~{}", c, sweet_c);
+        } else if c < lo {
+            println!("    Status: UNDER-UTILIZED -- current c={}, increase to ~{} for max throughput", c, sweet_c);
+        } else {
+            println!("    Status: OPTIMAL RANGE (c={}, sweet={}..{})", c, lo, hi);
+        }
+
+        println!("    Note: server-side CPU/memory may impose a lower ceiling");
+    }
 }
 
 fn print_details(d: &PhaseDetails) {

@@ -173,7 +173,7 @@ async fn main() {
     };
 
     let (results, elapsed) = engine::run(config).await;
-    let bench_result = stats::aggregate(results, elapsed);
+    let bench_result = stats::aggregate(results, elapsed, cli.concurrency);
     report::print_report(&bench_result);
 }
 
