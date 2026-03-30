@@ -217,12 +217,28 @@ pub async fn run(config: BenchConfig) -> (Vec<WorkerResult>, Duration) {
         });
     }
     let mut all_conns: Vec<BufReader<TcpStream>> = Vec::with_capacity(c);
+    let mut connect_failures = 0u64;
     while let Some(result) = connect_futs.next().await {
         if let Some(conn) = result {
             all_conns.push(conn);
+        } else {
+            connect_failures += 1;
         }
     }
     drop(connect_futs);
+
+    // If ALL connections failed, return immediately with error count
+    if all_conns.is_empty() {
+        stop.store(true, Ordering::Release);
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let _ = render_handle.abort();
+        return (vec![WorkerResult {
+            latencies: vec![], status_codes: vec![],
+            errors: connect_failures,
+            bytes_recv: 0,
+            write: PhaseAcc::new(), wait: PhaseAcc::new(), read: PhaseAcc::new(),
+        }], Duration::ZERO);
+    }
 
     // Distribute connections round-robin to workers
     let mut worker_conns: Vec<Vec<BufReader<TcpStream>>> =

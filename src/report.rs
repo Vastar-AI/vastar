@@ -127,9 +127,22 @@ pub async fn render_progress(
 
 /// Print final benchmark report to stdout.
 pub fn print_report(r: &BenchResult) {
+    let successful = r.total_requests as u64 - r.total_errors;
+
     println!();
     println!("Summary:");
     println!("  Total:        {:.4} secs", r.total_duration.as_secs_f64());
+    if successful == 0 {
+        println!("  Requests/sec: 0.00");
+        if r.total_errors > 0 {
+            println!();
+            println!("Errors: {} total", r.total_errors);
+            println!();
+            println!("All {} requests failed. Is the target running?", r.total_errors);
+            println!();
+        }
+        return;
+    }
     println!("  Slowest:      {:.4} secs", r.max_latency);
     println!("  Fastest:      {:.4} secs", r.min_latency);
     println!("  Average:      {:.4} secs", r.avg_latency);
@@ -223,10 +236,13 @@ pub fn print_report(r: &BenchResult) {
         println!();
     }
 
-    // Insight — last, after all data
+    // Insight — only if there are successful requests
+    let successful = r.total_requests as u64 - r.total_errors;
     let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout());
-    if use_color {
+    if successful > 0 && use_color {
         print_insight(&r.percentiles, r.rps, r.concurrency, r.avg_latency);
+    } else if successful == 0 && r.total_errors > 0 {
+        println!("All {} requests failed. Is the target running?", r.total_errors);
     }
     println!();
 }
