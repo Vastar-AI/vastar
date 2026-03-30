@@ -2,61 +2,65 @@
 
 HTTP load generator. Fast, zero-copy, Rust. Alternative to hey, oha, wrk.
 
-```
-$ vastar -n 3000 -c 500 -m POST -T "application/json" -d '{"prompt":"bench"}' http://localhost:4545/v1/chat/completions
+![vastar output](docs/assets/vastar-bench-output.png)
 
+<details>
+<summary>Text output (click to expand)</summary>
+
+```
 Summary:
-  Total:        0.3251 secs
-  Slowest:      0.0978 secs
-  Fastest:      0.0016 secs
-  Average:      0.0474 secs
-  Requests/sec: 9229.24
-  Total data:   174078167 bytes
-  Size/request: 58026 bytes
+  Total:        0.5027 secs
+  Slowest:      0.0966 secs
+  Fastest:      0.0012 secs
+  Average:      0.0469 secs
+  Requests/sec: 5968.13
+  Total data:   6205800 bytes
+  Size/request: 2068 bytes
 
 Response time distribution:
-  10.00% in 0.0243 secs
-  25.00% in 0.0327 secs
-  50.00% in 0.0461 secs  (46.06ms)
-  75.00% in 0.0627 secs
-  90.00% in 0.0741 secs
-  95.00% in 0.0811 secs  (81.09ms)
-  99.00% in 0.0892 secs  (89.22ms)
-  99.90% in 0.0951 secs  (95.07ms)
-  99.99% in 0.0978 secs
+  10.00% in 0.0190 secs
+  25.00% in 0.0434 secs
+  50.00% in 0.0488 secs  (48.81ms)
+  75.00% in 0.0567 secs
+  90.00% in 0.0649 secs
+  95.00% in 0.0706 secs  (70.58ms)
+  99.00% in 0.0804 secs  (80.42ms)
+  99.90% in 0.0955 secs  (95.52ms)
+  99.99% in 0.0966 secs
 
 Response time histogram:        (11-level SLO color gradient)
-  0.0016 [42]   ■■■
-  0.0103 [82]   ■■■■■■
-  0.0191 [361]  ■■■■■■■■■■■■■■■■■■■■■■■■■■■
-  0.0278 [630]  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
-  0.0366 [364]  ■■■■■■■■■■■■■■■■■■■■■■■■■■■
-  0.0453 [362]  ■■■■■■■■■■■■■■■■■■■■■■■■■■■
-  0.0541 [415]  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
-  0.0628 [364]  ■■■■■■■■■■■■■■■■■■■■■■■■■■■
-  0.0716 [213]  ■■■■■■■■■■■■■■■■
-  0.0803 [137]  ■■■■■■■■■■
-  0.0891 [30]   ■■
+  0.0012 [107]  ■■
+  0.0099 [180]  ■■■
+  0.0185 [170]  ■■■
+  0.0272 [85]   ■
+  0.0359 [350]  ■■■■■■
+  0.0445 [1088] ■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+  0.0532 [637]  ■■■■■■■■■■■■■■■■■■■■■■■■■■■■
+  0.0619 [233]  ■■■■■■■■■■
+  0.0706 [117]  ■■■■■
+  0.0792 [25]   ■
+  0.0879 [8]
 
   SLO:
-  ██ elite      <=16.3ms    ██ excellent  <=32.7ms    ██ good       <=46.1ms
-  ██ normal     <=62.7ms    ██ acceptable <=74.1ms    ██ degraded   <=81.1ms
-  ██ slow       <=89.2ms    ██ very slow  <=134ms     ██ critical   <=178ms
-  ██ severe     <=268ms     ██ violation  >268ms
+  ██ elite      <=21.7ms    ██ excellent  <=43.4ms    ██ good       <=48.8ms
+  ██ normal     <=56.7ms    ██ acceptable <=64.9ms    ██ degraded   <=70.6ms
+  ██ slow       <=80.4ms    ██ very slow  <=121ms     ██ critical   <=161ms
+  ██ severe     <=241ms     ██ violation  >241ms
 
 Status code distribution:
   [200] 3000 responses
 
 Details (average, fastest, slowest):
-  req write:    0.0000 secs, 0.0000 secs, 0.0014 secs
-  resp wait:    0.0226 secs, 0.0007 secs, 0.0482 secs
-  resp read:    0.0248 secs, 0.0008 secs, 0.0583 secs
+  req write:    0.0000 secs, 0.0000 secs, 0.0002 secs
+  resp wait:    0.0469 secs, 0.0012 secs, 0.0966 secs
+  resp read:    0.0000 secs, 0.0000 secs, 0.0000 secs
 
 Insight:
-  Latency spread p99/p50 = 1.9x -- good consistency
+  Latency spread p99/p50 = 1.6x -- good consistency
   Tail ratio p99/p95 = 1.1x -- clean tail
-  Outlier ratio p99.9/p99 = 1.1x -- no significant outliers
+  Outlier ratio p99.9/p99 = 1.2x -- no significant outliers
 ```
+</details>
 
 ## Why vastar
 
