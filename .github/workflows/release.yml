@@ -1,0 +1,185 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../vastar-${{ github.ref_name }}-${{ matrix.target }}.tar.gz vastar
+          cd ../../..
+
+      - name: Package (windows)
+        if: matrix.archive == 'zip'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../vastar-${{ github.ref_name }}-${{ matrix.target }}.zip vastar.exe
+          cd ../../..
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vastar-${{ matrix.target }}
+          path: vastar-${{ github.ref_name }}-${{ matrix.target }}.*
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          find . -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} . \;
+          sha256sum vastar-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/vastar-*
+            artifacts/SHA256SUMS.txt
+
+  homebrew:
+    name: Update Homebrew tap
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get release info
+        id: info
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Download checksums
+        run: |
+          TAG=${{ github.ref_name }}
+          curl -sL "https://github.com/Vastar-AI/vastar/releases/download/${TAG}/SHA256SUMS.txt" -o sums.txt
+          cat sums.txt
+
+          LINUX_SHA=$(grep 'x86_64-unknown-linux-gnu' sums.txt | awk '{print $1}')
+          MAC_INTEL_SHA=$(grep 'x86_64-apple-darwin' sums.txt | awk '{print $1}')
+          MAC_ARM_SHA=$(grep 'aarch64-apple-darwin' sums.txt | awk '{print $1}')
+
+          echo "linux_sha=$LINUX_SHA" >> "$GITHUB_OUTPUT"
+          echo "mac_intel_sha=$MAC_INTEL_SHA" >> "$GITHUB_OUTPUT"
+          echo "mac_arm_sha=$MAC_ARM_SHA" >> "$GITHUB_OUTPUT"
+        id: shas
+
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: Vastar-AI/homebrew-tap
+          token: ${{ secrets.TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update formula
+        run: |
+          VERSION=${{ steps.info.outputs.version }}
+          TAG=${{ steps.info.outputs.tag }}
+          BASE="https://github.com/Vastar-AI/vastar/releases/download/${TAG}"
+
+          cat > homebrew-tap/Formula/vastar.rb << FORMULA
+          class Vastar < Formula
+            desc "HTTP load generator. Fast, zero-copy, raw TCP. Alternative to hey, oha, wrk."
+            homepage "https://github.com/Vastar-AI/vastar"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "${BASE}/vastar-${TAG}-aarch64-apple-darwin.tar.gz"
+                sha256 "${{ steps.shas.outputs.mac_arm_sha }}"
+              else
+                url "${BASE}/vastar-${TAG}-x86_64-apple-darwin.tar.gz"
+                sha256 "${{ steps.shas.outputs.mac_intel_sha }}"
+              end
+            end
+
+            on_linux do
+              url "${BASE}/vastar-${TAG}-x86_64-unknown-linux-gnu.tar.gz"
+              sha256 "${{ steps.shas.outputs.linux_sha }}"
+            end
+
+            def install
+              bin.install "vastar"
+            end
+
+            test do
+              assert_match "vastar", shell_output("#{bin}/vastar --version")
+            end
+          end
+          FORMULA
+
+      - name: Push formula
+        run: |
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/vastar.rb
+          git commit -m "vastar ${{ steps.info.outputs.version }}"
+          git push
