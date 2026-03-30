@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::engine::Progress;
-use crate::stats::BenchResult;
+use crate::stats::{BenchResult, Percentiles, PhaseDetails};
 
 const PROGRESS_LINES: usize = 6;
 
@@ -66,7 +66,7 @@ pub async fn render_progress(
         };
 
         // Line 1: header
-        eprintln!("\x1b[2K  jude -- running");
+        eprintln!("\x1b[2K  vastar -- running");
 
         // Line 2: blank
         eprintln!("\x1b[2K");
@@ -146,26 +146,63 @@ pub fn print_report(r: &BenchResult) {
     }
     println!();
 
-    // Latency distribution
-    println!("Latency distribution:");
-    println!("  10% in {:.4} secs", r.percentiles.p10);
-    println!("  25% in {:.4} secs", r.percentiles.p25);
-    println!("  50% in {:.4} secs", r.percentiles.p50);
-    println!("  75% in {:.4} secs", r.percentiles.p75);
-    println!("  90% in {:.4} secs", r.percentiles.p90);
-    println!("  95% in {:.4} secs", r.percentiles.p95);
-    println!("  99% in {:.4} secs", r.percentiles.p99);
+    // Response time distribution — colored by SLO level (like oha)
+    let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    println!("Response time distribution:");
+    // Key percentiles highlighted with (ms) — p50, p95, p99, p99.9
+    // These 4 are what performance engineers focus on.
+    let pcts: &[(&str, f64, bool)] = &[
+        ("10.00%", r.percentiles.p10,   false),
+        ("25.00%", r.percentiles.p25,   false),
+        ("50.00%", r.percentiles.p50,   true),   // median — typical UX
+        ("75.00%", r.percentiles.p75,   false),
+        ("90.00%", r.percentiles.p90,   false),
+        ("95.00%", r.percentiles.p95,   true),   // SLO target
+        ("99.00%", r.percentiles.p99,   true),   // tail latency
+        ("99.90%", r.percentiles.p999,  true),   // worst case
+        ("99.99%", r.percentiles.p9999, false),
+    ];
+    for (pct, val, key) in pcts {
+        if use_color {
+            let (color, _) = slo_color(*val, &r.percentiles);
+            if *key {
+                println!("  {} in {}{:.4}{} secs  ({}{:.2}ms{})", pct, color, val, RESET, color, val * 1000.0, RESET);
+            } else {
+                println!("  {} in {}{:.4}{} secs", pct, color, val, RESET);
+            }
+        } else if *key {
+            println!("  {} in {:.4} secs  ({:.2}ms)", pct, val, val * 1000.0);
+        } else {
+            println!("  {} in {:.4} secs", pct, val);
+        }
+    }
+
+    // Insight — automated performance diagnosis from key ratios
+    if use_color {
+        print_insight(&r.percentiles, r.rps);
+    }
     println!();
 
-    // Histogram
+    // Histogram — 11-level SLO color gradient
     if !r.histogram.is_empty() {
+        let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout());
         println!("Response time histogram:");
         let max_count = r.histogram.iter().map(|b| b.count).max().unwrap_or(1).max(1);
         let bar_max = 48;
         for bucket in &r.histogram {
             let bar_len = bucket.count * bar_max / max_count;
-            let bar = "|".repeat(bar_len);
-            println!("  {:.4} [{}]\t{}", bucket.mark, bucket.count, bar);
+            if use_color {
+                let (color, _) = slo_color(bucket.mark, &r.percentiles);
+                let bar = "\u{2588}".repeat(bar_len);
+                println!("  {:.4} [{}]\t{}{}{}", bucket.mark, bucket.count, color, bar, RESET);
+            } else {
+                let bar = "#".repeat(bar_len);
+                println!("  {:.4} [{}]\t{}", bucket.mark, bucket.count, bar);
+            }
+        }
+        if use_color {
+            println!();
+            print_slo_legend(&r.percentiles);
         }
         println!();
     }
@@ -181,9 +218,228 @@ pub fn print_report(r: &BenchResult) {
         println!();
     }
 
+    // Details (like hey)
+    print_details(&r.details);
+
     // Errors
     if r.total_errors > 0 {
         println!("Errors: {} total", r.total_errors);
         println!();
     }
+}
+
+fn print_insight(p: &Percentiles, _rps: f64) {
+    let p95_p50 = if p.p50 > 0.0 { p.p95 / p.p50 } else { 1.0 };
+    let p99_p95 = if p.p95 > 0.0 { p.p99 / p.p95 } else { 1.0 };
+    let p999_p99 = if p.p99 > 0.0 { p.p999 / p.p99 } else { 1.0 };
+    let spread = if p.p50 > 0.0 { p.p99 / p.p50 } else { 1.0 };
+
+    println!();
+    println!("  Insight:");
+
+    // Overall latency consistency
+    if spread <= 1.5 {
+        println!("    Latency spread p99/p50 = {:.1}x -- excellent consistency", spread);
+    } else if spread <= 3.0 {
+        println!("    Latency spread p99/p50 = {:.1}x -- good consistency", spread);
+    } else if spread <= 5.0 {
+        println!("    Latency spread p99/p50 = {:.1}x -- moderate variance", spread);
+    } else {
+        println!("    Latency spread p99/p50 = {:.1}x -- high variance, investigate slow path", spread);
+    }
+
+    // Tail latency analysis
+    if p99_p95 > 2.0 {
+        println!("    Tail ratio p99/p95 = {:.1}x -- tail latency problem (>2x)", p99_p95);
+    } else if p99_p95 > 1.5 {
+        println!("    Tail ratio p99/p95 = {:.1}x -- mild tail latency", p99_p95);
+    } else {
+        println!("    Tail ratio p99/p95 = {:.1}x -- clean tail", p99_p95);
+    }
+
+    // Severe outlier detection
+    if p999_p99 > 3.0 {
+        println!("    Outlier ratio p99.9/p99 = {:.1}x -- severe outliers (>3x), check GC/infra", p999_p99);
+    } else if p999_p99 > 2.0 {
+        println!("    Outlier ratio p99.9/p99 = {:.1}x -- outliers present", p999_p99);
+    } else {
+        println!("    Outlier ratio p99.9/p99 = {:.1}x -- no significant outliers", p999_p99);
+    }
+
+    // Head-of-line blocking / queuing
+    if p95_p50 > 3.0 {
+        println!("    Queue ratio p95/p50 = {:.1}x -- queuing/contention detected (>3x)", p95_p50);
+    } else if p95_p50 > 2.0 {
+        println!("    Queue ratio p95/p50 = {:.1}x -- mild queuing", p95_p50);
+    }
+
+}
+
+fn print_details(d: &PhaseDetails) {
+    println!("Details (average, fastest, slowest):");
+    println!("  req write:\t{:.4} secs, {:.4} secs, {:.4} secs",
+        d.req_write.avg, d.req_write.min, d.req_write.max);
+    println!("  resp wait:\t{:.4} secs, {:.4} secs, {:.4} secs",
+        d.resp_wait.avg, d.resp_wait.min, d.resp_wait.max);
+    println!("  resp read:\t{:.4} secs, {:.4} secs, {:.4} secs",
+        d.resp_read.avg, d.resp_read.min, d.resp_read.max);
+    println!();
+}
+
+// ---------------------------------------------------------------------------
+// 11-Level SLO Color Gradient
+// ---------------------------------------------------------------------------
+//
+// Maps response latency to SLO health levels using ANSI 256-color.
+// Tight quantization: green → lime → yellow → orange → red
+//
+// | Level | Threshold     | Color        | SLO Status  |
+// |-------|---------------|--------------|-------------|
+// |  1    | <= p25×0.5    | bright green | elite       |
+// |  2    | <= p25        | green        | excellent   |
+// |  3    | <= p50        | dark green   | good        |
+// |  4    | <= p75        | lime         | normal      |
+// |  5    | <= p90        | yellow       | acceptable  |
+// |  6    | <= p95        | gold         | degraded    |
+// |  7    | <= p99        | orange       | slow        |
+// |  8    | <= p99×1.5    | dark orange  | very slow   |
+// |  9    | <= p99×2.0    | red-orange   | critical    |
+// | 10    | <= p99×3.0    | red          | severe      |
+// | 11    | > p99×3.0     | dark red     | violation   |
+
+const RESET: &str = "\x1b[0m";
+
+// 11-level color gradient: deep green → deep red, all solid █ bars.
+//
+//  Level  Color               ANSI 256
+//  ─────  ──────────────────  ────────
+//   1     deep green          22
+//   2     green               28
+//   3     bright green        34
+//   4     lime                76
+//   5     yellow              184
+//   6     gold                220
+//   7     orange              208
+//   8     dark orange         202
+//   9     red-orange          196
+//  10     red                 160
+//  11     deep red            124
+
+// 11-level gradient using ANSI 256-color cube (index = 16 + 36r + 6g + b).
+// Symmetric path through the color cube:
+//
+//   Green phase    : r=0, g ascending   → dark green to bright green
+//   Transition up  : g=5, r ascending   → lime to yellow-green
+//   Center         : r=5, g=5           → yellow
+//   Transition down: r=5, g descending  → orange
+//   Red phase      : g=0, r descending  → red to dark red
+//
+//  Lvl  (r,g,b)  ANSI   Color
+//  ───  ───────  ────   ─────────────
+//   1   (0,1,0)   22    dark green
+//   2   (0,2,0)   28    green
+//   3   (0,3,0)   34    medium green
+//   4   (0,4,0)   40    bright green
+//   5   (1,5,0)   82    lime
+//   6   (3,5,0)  154    yellow-green
+//   7   (5,5,0)  226    yellow (center)
+//   8   (5,3,0)  214    orange-yellow
+//   9   (5,1,0)  202    orange-red
+//  10   (4,0,0)  160    red
+//  11   (2,0,0)   88    dark red
+
+const SLO_LEVELS: [(&str, &str); 11] = [
+    ("\x1b[38;5;22m",  "elite"),      //  (0,1,0) dark green
+    ("\x1b[38;5;28m",  "excellent"),   //  (0,2,0) green
+    ("\x1b[38;5;34m",  "good"),        //  (0,3,0) medium green
+    ("\x1b[38;5;40m",  "normal"),      //  (0,4,0) bright green
+    ("\x1b[38;5;82m",  "acceptable"),  //  (1,5,0) lime
+    ("\x1b[38;5;154m", "degraded"),    //  (3,5,0) yellow-green
+    ("\x1b[38;5;226m", "slow"),        //  (5,5,0) yellow
+    ("\x1b[38;5;214m", "very slow"),   //  (5,3,0) orange-yellow
+    ("\x1b[38;5;202m", "critical"),    //  (5,1,0) orange-red
+    ("\x1b[38;5;160m", "severe"),      //  (4,0,0) red
+    ("\x1b[38;5;88m",  "violation"),   //  (2,0,0) dark red
+];
+
+fn slo_color(latency: f64, p: &Percentiles) -> (&'static str, &'static str) {
+    let level = if latency <= p.p25 * 0.5 {
+        0
+    } else if latency <= p.p25 {
+        1
+    } else if latency <= p.p50 {
+        2
+    } else if latency <= p.p75 {
+        3
+    } else if latency <= p.p90 {
+        4
+    } else if latency <= p.p95 {
+        5
+    } else if latency <= p.p99 {
+        6
+    } else if latency <= p.p99 * 1.5 {
+        7
+    } else if latency <= p.p99 * 2.0 {
+        8
+    } else if latency <= p.p99 * 3.0 {
+        9
+    } else {
+        10
+    };
+    (SLO_LEVELS[level].0, SLO_LEVELS[level].1)
+}
+
+fn print_slo_legend(p: &Percentiles) {
+    let fmt_ms = |v: f64| -> String {
+        let ms = v * 1000.0;
+        if ms < 1.0 { format!("{:.2}ms", ms) }
+        else if ms < 100.0 { format!("{:.1}ms", ms) }
+        else { format!("{:.0}ms", ms) }
+    };
+
+    let thresholds: [String; 11] = [
+        format!("<={}", fmt_ms(p.p25 * 0.5)),
+        format!("<={}", fmt_ms(p.p25)),
+        format!("<={}", fmt_ms(p.p50)),
+        format!("<={}", fmt_ms(p.p75)),
+        format!("<={}", fmt_ms(p.p90)),
+        format!("<={}", fmt_ms(p.p95)),
+        format!("<={}", fmt_ms(p.p99)),
+        format!("<={}", fmt_ms(p.p99 * 1.5)),
+        format!("<={}", fmt_ms(p.p99 * 2.0)),
+        format!("<={}", fmt_ms(p.p99 * 3.0)),
+        format!(">{}", fmt_ms(p.p99 * 3.0)),
+    ];
+
+    // 4 rows × 3 columns (last row has 2)
+    const CELL: usize = 26;
+    let items: Vec<String> = (0..11)
+        .map(|i| format!("{}\u{2588}\u{2588}{} {:<11}{}", SLO_LEVELS[i].0, RESET, SLO_LEVELS[i].1, thresholds[i]))
+        .collect();
+
+    println!("  SLO:");
+    for row in items.chunks(3) {
+        print!("  ");
+        for item in row {
+            let visible_len = strip_ansi_len(item);
+            let pad = if CELL > visible_len { CELL - visible_len } else { 0 };
+            print!("{}{}", item, " ".repeat(pad));
+        }
+        println!();
+    }
+}
+
+fn strip_ansi_len(s: &str) -> usize {
+    let mut len = 0;
+    let mut in_esc = false;
+    for c in s.chars() {
+        if in_esc {
+            if c == 'm' { in_esc = false; }
+        } else if c == '\x1b' {
+            in_esc = true;
+        } else {
+            len += 1;
+        }
+    }
+    len
 }

@@ -7,8 +7,8 @@ mod stats;
 
 #[derive(Parser)]
 #[command(
-    name = "jude",
-    about = "jude — HTTP load generator. Fast, zero-copy, Rust.",
+    name = "vastar",
+    about = "vastar — HTTP load generator. Fast, zero-copy, Rust.",
     version
 )]
 struct Cli {
@@ -114,7 +114,7 @@ async fn main() {
     // Build headers
     let mut headers: Vec<(String, String)> = Vec::new();
     headers.push(("content-type".into(), cli.content_type.clone()));
-    headers.push(("user-agent".into(), "jude/0.1.0".into()));
+    headers.push(("user-agent".into(), "vastar/0.1.0".into()));
 
     if let Some(ref accept) = cli.accept {
         headers.push(("accept".into(), accept.clone()));

@@ -1,23 +1,22 @@
 [package]
-name = "jude"
+name = "vastar"
 version = "0.1.0"
 edition = "2021"
-description = "jude — HTTP load generator. Fast, zero-copy, Rust."
+description = "HTTP load generator. Fast, zero-copy, raw TCP. Alternative to hey, oha, wrk."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/Vastar-AI/jude"
-homepage = "https://github.com/Vastar-AI/jude"
+keywords = ["http", "benchmark", "load-testing", "performance"]
+categories = ["command-line-utilities", "web-programming"]
+exclude = ["bench-server/", "benchmark.sh", "BENCHMARK.md"]
 
 [[bin]]
-name = "jude"
+name = "vastar"
 path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-hyper = { version = "1", features = ["client", "http1"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "tokio", "http1"] }
-http-body-util = "0.1"
 bytes = "1"
 clap = { version = "4", features = ["derive"] }
+futures-util = "0.3"
 
 [profile.release]
 opt-level = 3
