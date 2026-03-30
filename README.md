@@ -82,6 +82,20 @@ Insight:
 | c=5,000 | **372,191** | 64,443 | 14,196 | vastar 5.8x vs hey |
 | c=10,000 | **336,700** | 61,427 | 38,141 | vastar 5.5x vs hey |
 
+### Throughput (100KB payload, requests/sec)
+
+| Concurrency | vastar | hey | oha | Winner |
+|---|---|---|---|---|
+| c=1 | **40,406** | 20,927 | 30,982 | vastar 1.9x vs hey |
+| c=10 | 89,683 | 74,310 | **133,387** | oha |
+| c=100 | 74,229 | 70,411 | **81,466** | oha |
+| c=200 | 69,080 | **74,962** | 68,332 | hey |
+| c=500 | **96,809** | 65,999 | 56,798 | vastar 1.5x vs hey |
+| c=1,000 | **89,545** | 57,265 | 18,017 | vastar 1.6x vs hey |
+| c=10,000 | **75,224** | 38,281 | 23,113 | vastar 2x vs hey |
+
+oha dominates at c=10-200 with large payloads thanks to hyper's optimized connection pool. hey wins at c=200/100KB. vastar pulls ahead again at c=500+.
+
 ### Memory (0B payload, Peak RSS)
 
 | Concurrency | vastar | hey | oha |
@@ -90,7 +104,7 @@ Insight:
 | c=1,000 | **32 MB** | 80 MB | 41 MB |
 | c=10,000 | **284 MB** | 492 MB | 212 MB |
 
-At c=1000: vastar **537K RPS** — 5x faster than hey, 30x faster than oha. Memory 2-5x smaller across all levels.
+vastar uses 2-5x less memory than hey across all levels. At c=10,000 with 100KB payload: vastar 329 MB vs oha 1,477 MB.
 
 See [BENCHMARK.md](BENCHMARK.md) for full comparison across 10 concurrency levels and 4 payload sizes.
 
