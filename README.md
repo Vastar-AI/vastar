@@ -6,7 +6,6 @@ HTTP load generator. Fast, zero-copy, Rust. Alternative to hey, oha, wrk.
 $ vastar -n 3000 -c 300 -m POST -T "application/json" \
     -d '{"prompt":"bench"}' http://localhost:3081/api/gw/trigger
 
-```
 Summary:
   Total:        0.5027 secs
   Slowest:      0.0966 secs
@@ -59,6 +58,7 @@ Insight:
   Tail ratio p99/p95 = 1.1x -- clean tail
   Outlier ratio p99.9/p99 = 1.2x -- no significant outliers
 ```
+
 *With SLO color gradient (dark green → red):*
 
 ![vastar output](docs/assets/vastar-bench-output.png)
