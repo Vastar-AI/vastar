@@ -275,33 +275,33 @@ fn print_insight(p: &Percentiles, rps: f64, concurrency: usize, avg_latency: f64
         println!("  Queue ratio p95/p50 = {:.1}x -- mild queuing", p95_p50);
     }
 
-    // Sweet spot concurrency (Little's Law: C = λ × W)
+    // Sweet spot concurrency estimation (Little's Law: C = RPS × avg_latency)
+    // Uses avg (stable) not p95 (shifts with load → feedback loop).
+    // Range ±30%. Overridden to SATURATED if queuing detected.
     if rps > 0.0 && avg_latency > 0.0 {
-        let sweet_c = (rps * p.p95).round() as usize;
+        let base = (rps * avg_latency).round() as usize;
+        let lo = (base as f64 * 0.8) as usize;
+        let hi = (base as f64 * 1.3) as usize;
         let cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1);
         let c = concurrency;
+        let saturated = p95_p50 > 2.0;
 
         println!();
         println!("  Sweet spot concurrency (Little's Law):");
-        println!("    C = RPS x p95_latency = {:.0} x {:.4}s = ~{}", rps, p.p95, sweet_c);
-        println!("    Machine: {} cores, client-side measurement", cpus);
+        println!("    C = RPS x avg_latency = {:.0} x {:.4}s = ~{}", rps, avg_latency, base);
+        println!("    Range: ~{}..{} (client, {} cores)", lo, hi, cpus);
 
-        let lo = (sweet_c as f64 * 0.7) as usize;
-        let hi = (sweet_c as f64 * 1.3) as usize;
-
-        if c > sweet_c * 2 {
-            println!("    Status: OVER-SATURATED -- reduce to ~{} for optimal throughput", sweet_c);
+        if saturated {
+            println!("    Status: SATURATED -- queuing detected (p95/p50={:.1}x), reduce below c={}", p95_p50, c);
         } else if c > hi {
-            println!("    Status: SLIGHTLY HIGH -- current c={}, consider ~{}", c, sweet_c);
+            println!("    Status: HIGH -- current c={}, consider reducing to ~{}..{}", c, lo, hi);
         } else if c < lo {
-            println!("    Status: UNDER-UTILIZED -- current c={}, increase to ~{} for max throughput", c, sweet_c);
+            println!("    Status: HEADROOM -- current c={}, can increase to ~{}..{}", c, lo, hi);
         } else {
-            println!("    Status: OPTIMAL RANGE (c={}, sweet={}..{})", c, lo, hi);
+            println!("    Status: OPTIMAL (c={} within {}..{})", c, lo, hi);
         }
-
-        println!("    Note: server-side CPU/memory may impose a lower ceiling");
     }
 }
 
