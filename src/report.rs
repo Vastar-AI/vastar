@@ -216,13 +216,19 @@ pub fn print_report(r: &BenchResult) {
         println!();
     }
 
-    // Status code distribution
+    // Status code distribution — colored by status class
     if !r.status_dist.is_empty() {
+        let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout());
         println!("Status code distribution:");
         let mut codes: Vec<_> = r.status_dist.iter().collect();
         codes.sort_by_key(|(k, _)| **k);
         for (code, count) in codes {
-            println!("  [{}] {} responses", code, count);
+            let (color, desc) = status_info(*code, use_color);
+            if *code >= 200 && *code < 300 {
+                println!("  {}[{}] {} responses{}", color, code, count, RESET);
+            } else {
+                println!("  {}[{}] {} responses{} -- {}", color, code, count, RESET, desc);
+            }
         }
         println!();
     }
@@ -236,18 +242,34 @@ pub fn print_report(r: &BenchResult) {
         println!();
     }
 
-    // Insight — only if there are successful requests
-    let successful = r.total_requests as u64 - r.total_errors;
+    // Insight — include non-2xx as errors
+    let non_2xx: usize = r.status_dist.iter()
+        .filter(|(k, _)| **k < 200 || **k >= 300)
+        .map(|(_, v)| *v)
+        .sum();
+    let total_failures = r.total_errors as usize + non_2xx;
+    let successful = r.total_requests.saturating_sub(total_failures);
     let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    let error_rate = if r.total_requests > 0 {
+        total_failures as f64 / r.total_requests as f64
+    } else { 0.0 };
     if successful > 0 && use_color {
-        print_insight(&r.percentiles, r.rps, r.concurrency, r.avg_latency);
+        print_insight(&r.percentiles, r.rps, r.concurrency, r.avg_latency, error_rate, &r.status_dist);
     } else if successful == 0 && r.total_errors > 0 {
         println!("All {} requests failed. Is the target running?", r.total_errors);
     }
     println!();
 }
 
-fn print_insight(p: &Percentiles, _rps: f64, _concurrency: usize, _avg_latency: f64) {
+// Insight severity colors
+const C_OK: &str = "\x1b[38;5;34m";    // green — healthy
+const C_WARN: &str = "\x1b[38;5;178m"; // dark amber — warning
+const C_CRIT: &str = "\x1b[38;5;124m"; // dark red — serious
+
+fn print_insight(
+    p: &Percentiles, _rps: f64, _concurrency: usize, _avg_latency: f64,
+    error_rate: f64, status_dist: &std::collections::HashMap<u16, usize>,
+) {
     let p99_p95 = if p.p95 > 0.0 { p.p99 / p.p95 } else { 1.0 };
     let p999_p99 = if p.p99 > 0.0 { p.p999 / p.p99 } else { 1.0 };
     let spread = if p.p50 > 0.0 { p.p99 / p.p50 } else { 1.0 };
@@ -255,42 +277,83 @@ fn print_insight(p: &Percentiles, _rps: f64, _concurrency: usize, _avg_latency: 
 
     println!("Insight:");
 
-    // Overall latency consistency
+    // Error rate — most critical, show first
+    if error_rate > 0.0 {
+        let pct = error_rate * 100.0;
+        let non_200: Vec<String> = status_dist.iter()
+            .filter(|(k, _)| **k < 200 || **k >= 300)
+            .map(|(k, v)| format!("{}x{}", k, v))
+            .collect();
+        let codes = if non_200.is_empty() { String::new() } else { format!(" ({})", non_200.join(", ")) };
+        if pct > 50.0 {
+            println!("  {}Error rate: {:.1}%{} -- CRITICAL{}", C_CRIT, pct, RESET, codes);
+        } else if pct > 10.0 {
+            println!("  {}Error rate: {:.1}%{} -- HIGH{}", C_CRIT, pct, RESET, codes);
+        } else if pct > 1.0 {
+            println!("  {}Error rate: {:.1}%{} -- elevated{}", C_WARN, pct, RESET, codes);
+        } else {
+            println!("  {}Error rate: {:.1}%{} -- low{}", C_WARN, pct, RESET, codes);
+        }
+    }
+
+    // Latency consistency
     if spread <= 1.5 {
-        println!("  Latency spread p99/p50 = {:.1}x -- excellent consistency", spread);
+        println!("  {}Latency spread p99/p50 = {:.1}x{} -- excellent consistency", C_OK, spread, RESET);
     } else if spread <= 3.0 {
-        println!("  Latency spread p99/p50 = {:.1}x -- good consistency", spread);
+        println!("  {}Latency spread p99/p50 = {:.1}x{} -- good consistency", C_OK, spread, RESET);
     } else if spread <= 5.0 {
-        println!("  Latency spread p99/p50 = {:.1}x -- moderate variance", spread);
+        println!("  {}Latency spread p99/p50 = {:.1}x{} -- moderate variance", C_WARN, spread, RESET);
     } else {
-        println!("  Latency spread p99/p50 = {:.1}x -- high variance, investigate slow path", spread);
+        println!("  {}Latency spread p99/p50 = {:.1}x{} -- high variance, investigate slow path", C_CRIT, spread, RESET);
     }
 
-    // Tail latency analysis
+    // Tail latency
     if p99_p95 > 2.0 {
-        println!("  Tail ratio p99/p95 = {:.1}x -- tail latency problem (>2x)", p99_p95);
+        println!("  {}Tail ratio p99/p95 = {:.1}x{} -- tail latency problem (>2x)", C_CRIT, p99_p95, RESET);
     } else if p99_p95 > 1.5 {
-        println!("  Tail ratio p99/p95 = {:.1}x -- mild tail latency", p99_p95);
+        println!("  {}Tail ratio p99/p95 = {:.1}x{} -- mild tail latency", C_WARN, p99_p95, RESET);
     } else {
-        println!("  Tail ratio p99/p95 = {:.1}x -- clean tail", p99_p95);
+        println!("  {}Tail ratio p99/p95 = {:.1}x{} -- clean tail", C_OK, p99_p95, RESET);
     }
 
-    // Severe outlier detection
+    // Outlier detection
     if p999_p99 > 3.0 {
-        println!("  Outlier ratio p99.9/p99 = {:.1}x -- severe outliers (>3x), check GC/infra", p999_p99);
+        println!("  {}Outlier ratio p99.9/p99 = {:.1}x{} -- severe outliers (>3x), check GC/infra", C_CRIT, p999_p99, RESET);
     } else if p999_p99 > 2.0 {
-        println!("  Outlier ratio p99.9/p99 = {:.1}x -- outliers present", p999_p99);
+        println!("  {}Outlier ratio p99.9/p99 = {:.1}x{} -- outliers present", C_WARN, p999_p99, RESET);
     } else {
-        println!("  Outlier ratio p99.9/p99 = {:.1}x -- no significant outliers", p999_p99);
+        println!("  {}Outlier ratio p99.9/p99 = {:.1}x{} -- no significant outliers", C_OK, p999_p99, RESET);
     }
 
-    // Head-of-line blocking / queuing
+    // Queuing
     if p95_p50 > 3.0 {
-        println!("  Queue ratio p95/p50 = {:.1}x -- queuing/contention detected (>3x)", p95_p50);
+        println!("  {}Queue ratio p95/p50 = {:.1}x{} -- queuing/contention detected (>3x)", C_CRIT, p95_p50, RESET);
     } else if p95_p50 > 2.0 {
-        println!("  Queue ratio p95/p50 = {:.1}x -- mild queuing", p95_p50);
+        println!("  {}Queue ratio p95/p50 = {:.1}x{} -- mild queuing", C_WARN, p95_p50, RESET);
     }
+}
 
+/// HTTP status code color + description
+fn status_info(code: u16, use_color: bool) -> (&'static str, &'static str) {
+    let desc = match code {
+        200 => "OK", 201 => "Created", 204 => "No Content",
+        301 => "Moved Permanently", 302 => "Redirect", 304 => "Not Modified",
+        400 => "Bad Request", 401 => "Unauthorized", 403 => "Forbidden",
+        404 => "Not Found", 405 => "Method Not Allowed", 408 => "Request Timeout",
+        429 => "Too Many Requests",
+        500 => "Internal Server Error", 501 => "Not Implemented",
+        502 => "Bad Gateway", 503 => "Service Unavailable", 504 => "Gateway Timeout",
+        _ => "Unknown",
+    };
+    if !use_color { return ("", desc); }
+    let color = match code {
+        200..=299 => "\x1b[38;5;34m",  // green
+        300..=399 => "\x1b[38;5;178m", // amber
+        400..=499 => "\x1b[38;5;202m", // orange-red
+        500..=599 => "\x1b[38;5;124m", // dark red
+        _ => "",
+    };
+    (color, desc)
 }
 
 fn print_details(d: &PhaseDetails) {
