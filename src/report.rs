@@ -231,7 +231,7 @@ pub fn print_report(r: &BenchResult) {
     println!();
 }
 
-fn print_insight(p: &Percentiles, rps: f64, concurrency: usize, avg_latency: f64) {
+fn print_insight(p: &Percentiles, _rps: f64, _concurrency: usize, _avg_latency: f64) {
     let p99_p95 = if p.p95 > 0.0 { p.p99 / p.p95 } else { 1.0 };
     let p999_p99 = if p.p99 > 0.0 { p.p999 / p.p99 } else { 1.0 };
     let spread = if p.p50 > 0.0 { p.p99 / p.p50 } else { 1.0 };
@@ -275,34 +275,6 @@ fn print_insight(p: &Percentiles, rps: f64, concurrency: usize, avg_latency: f64
         println!("  Queue ratio p95/p50 = {:.1}x -- mild queuing", p95_p50);
     }
 
-    // Sweet spot concurrency estimation (Little's Law: C = RPS × avg_latency)
-    // Uses avg (stable) not p95 (shifts with load → feedback loop).
-    // Range ±30%. Overridden to SATURATED if queuing detected.
-    if rps > 0.0 && avg_latency > 0.0 {
-        let base = (rps * avg_latency).round() as usize;
-        let lo = (base as f64 * 0.8) as usize;
-        let hi = (base as f64 * 1.3) as usize;
-        let cpus = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1);
-        let c = concurrency;
-        let saturated = p95_p50 > 2.0;
-
-        println!();
-        println!("  Sweet spot concurrency (Little's Law):");
-        println!("    C = RPS x avg_latency = {:.0} x {:.4}s = ~{}", rps, avg_latency, base);
-        println!("    Range: ~{}..{} (client, {} cores)", lo, hi, cpus);
-
-        if saturated {
-            println!("    Status: SATURATED -- queuing detected (p95/p50={:.1}x), reduce below c={}", p95_p50, c);
-        } else if c > hi {
-            println!("    Status: HIGH -- current c={}, consider reducing to ~{}..{}", c, lo, hi);
-        } else if c < lo {
-            println!("    Status: HEADROOM -- current c={}, can increase to ~{}..{}", c, lo, hi);
-        } else {
-            println!("    Status: OPTIMAL (c={} within {}..{})", c, lo, hi);
-        }
-    }
 }
 
 fn print_details(d: &PhaseDetails) {
