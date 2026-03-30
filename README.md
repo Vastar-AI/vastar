@@ -72,39 +72,39 @@ Insight:
 
 ### Throughput (0B payload, requests/sec)
 
-| Concurrency | vastar | hey | oha | Winner |
-|---|---|---|---|---|
-| c=1 | **93,192** | 40,942 | 71,750 | vastar 2.3x vs hey |
-| c=10 | 226,650 | 145,607 | **320,712** | oha |
-| c=200 | 220,311 | 132,650 | **240,421** | oha |
-| c=500 | **408,117** | 71,695 | 234,676 | vastar 1.7x vs oha |
-| c=1,000 | **536,758** | 106,861 | 18,329 | vastar 5x vs hey |
-| c=5,000 | **372,191** | 64,443 | 14,196 | vastar 5.8x vs hey |
-| c=10,000 | **336,700** | 61,427 | 38,141 | vastar 5.5x vs hey |
+| Concurrency | vastar | hey | oha |
+|---|---|---|---|
+| c=1 | 93,192 | 40,942 | 71,750 |
+| c=10 | 226,650 | 145,607 | 320,712 |
+| c=200 | 220,311 | 132,650 | 240,421 |
+| c=500 | 408,117 | 71,695 | 234,676 |
+| c=1,000 | 536,758 | 106,861 | 18,329 |
+| c=5,000 | 372,191 | 64,443 | 14,196 |
+| c=10,000 | 336,700 | 61,427 | 38,141 |
 
 ### Throughput (100KB payload, requests/sec)
 
-| Concurrency | vastar | hey | oha | Winner |
-|---|---|---|---|---|
-| c=1 | **40,406** | 20,927 | 30,982 | vastar 1.9x vs hey |
-| c=10 | 89,683 | 74,310 | **133,387** | oha |
-| c=100 | 74,229 | 70,411 | **81,466** | oha |
-| c=200 | 69,080 | **74,962** | 68,332 | hey |
-| c=500 | **96,809** | 65,999 | 56,798 | vastar 1.5x vs hey |
-| c=1,000 | **89,545** | 57,265 | 18,017 | vastar 1.6x vs hey |
-| c=10,000 | **75,224** | 38,281 | 23,113 | vastar 2x vs hey |
-
-oha dominates at c=10-200 with large payloads thanks to hyper's optimized connection pool. hey wins at c=200/100KB. vastar pulls ahead again at c=500+.
+| Concurrency | vastar | hey | oha |
+|---|---|---|---|
+| c=1 | 40,406 | 20,927 | 30,982 |
+| c=10 | 89,683 | 74,310 | 133,387 |
+| c=100 | 74,229 | 70,411 | 81,466 |
+| c=200 | 69,080 | 74,962 | 68,332 |
+| c=500 | 96,809 | 65,999 | 56,798 |
+| c=1,000 | 89,545 | 57,265 | 18,017 |
+| c=10,000 | 75,224 | 38,281 | 23,113 |
 
 ### Memory (0B payload, Peak RSS)
 
 | Concurrency | vastar | hey | oha |
 |---|---|---|---|
-| c=1 | **4 MB** | 13 MB | 15 MB |
-| c=1,000 | **32 MB** | 80 MB | 41 MB |
-| c=10,000 | **284 MB** | 492 MB | 212 MB |
+| c=1 | 4 MB | 13 MB | 15 MB |
+| c=1,000 | 32 MB | 80 MB | 41 MB |
+| c=10,000 | 284 MB | 492 MB | 212 MB |
 
-vastar uses 2-5x less memory than hey across all levels. At c=10,000 with 100KB payload: vastar 329 MB vs oha 1,477 MB.
+**Note:** Each tool has different strengths. oha (hyper) excels at c=10-200 with large payloads. hey (Go) is stable across all scenarios. vastar (raw TCP) excels at c=1 and c=500+ where framework overhead matters most. No single tool wins every scenario — choose based on your concurrency range and payload size.
+
+Throughput alone does not determine accuracy. A faster tool may simply have less per-request overhead, while server-side latency (`resp wait`) remains the same across all tools. See [BENCHMARK.md](BENCHMARK.md) for full methodology and analysis.
 
 See [BENCHMARK.md](BENCHMARK.md) for full comparison across 10 concurrency levels and 4 payload sizes.
 
