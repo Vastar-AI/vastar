@@ -177,35 +177,7 @@ vastar -m POST -T "application/json" -D payload.json http://localhost:8080/api
 
 ## Architecture
 
-```
-              CLI (clap)
-                  |
-            +-----+-----+
-            | Coordinator |
-            +-----+-----+
-                  |
-    Phase 0: Pre-connect (semaphore, max 256 concurrent)
-                  |
-    Phase 1: Distribute connections to workers
-                  |
-        +---------+---------+---------+
-        |         |         |         |
-    Worker 0  Worker 1  ...  Worker N      <- clamp(C/128, 1, cpus*2)
-        |         |         |         |
-   +----+----+   ...       ...       ...
-   |    |    |
-  Conn Conn Conn   <- FuturesUnordered event loop
-   |    |    |         per worker (~128 conns each)
-   |    |    |
-  Raw TCP streams  <- hand-crafted HTTP/1.1
-   |    |    |
-   +----+----+
-        |
-   BufReader 32KB <- synchronous header parse
-        |              fill_buf() + consume() body drain
-        |
-   AtomicU64 progress <- lock-free, 10 FPS render
-```
+<img src="docs/assets/architecture.svg" width="100%" />
 
 ### How it works
 
