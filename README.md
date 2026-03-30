@@ -61,7 +61,7 @@ Insight:
 
 *With SLO color gradient (dark green → red):*
 
-![vastar output](docs/assets/vastar-bench-output.png)
+<img src="docs/assets/vastar-bench-output.png" width="50%" />
 
 ## Why vastar
 
