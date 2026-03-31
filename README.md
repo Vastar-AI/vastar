@@ -110,7 +110,7 @@ Throughput alone does not determine accuracy. A faster tool may simply have less
 
 ## Features
 
-- **11-level SLO color histogram** — ANSI 256-color gradient (dark green to dark red) mapped to percentile thresholds
+- **11-level SLO color histogram** — ANSI 256-color gradient (dark green to dark red) mapped to percentile thresholds. SLO levels are relative to the current run's own distribution — not absolute latency targets. Organizations like Google, AWS, and others define custom SLO policies per service (e.g., p99 < 200ms for API, p99 < 50ms for cache). Use vastar's SLO as a visual distribution guide, then define your own thresholds in your monitoring platform.
 - **Automated Insight** — latency spread, tail ratio, outlier detection from p50/p95/p99/p99.9
 - **Key percentile highlights** — p50, p95, p99, p99.9 annotated with colored (ms) values
 - **Phase timing Details** — req write, resp wait, resp read breakdown (like hey)

@@ -66,7 +66,7 @@ pub async fn render_progress(
         };
 
         // Line 1: header
-        eprintln!("\x1b[2K  vastar -- running");
+        eprintln!("\x1b[2K  \x1b[38;5;34mvastar\x1b[0m -- running");
 
         // Line 2: blank
         eprintln!("\x1b[2K");
@@ -74,25 +74,37 @@ pub async fn render_progress(
         // Line 3: progress bar or request count
         if is_duration_mode {
             eprintln!(
-                "\x1b[2K  Requests: {}  Errors: {}",
+                "\x1b[2K  Requests: \x1b[38;5;34m{}\x1b[0m  Errors: {}",
                 completed, errors
             );
         } else {
             let pct = if total > 0 { completed * 100 / total } else { 0 };
             let bar_width = 40;
             let filled = (pct * bar_width / 100).min(bar_width);
-            let bar = "=".repeat(filled);
-            let arrow = if filled < bar_width { ">" } else { "" };
-            let space = " ".repeat(bar_width.saturating_sub(filled + if filled < bar_width { 1 } else { 0 }));
+            // Colored bar: each ■ gets a color from green gradient based on position
+            let mut bar = String::with_capacity(filled * 20);
+            for i in 0..filled {
+                // Gradient: dark green(22) → green(28) → bright green(34) → lime(40) → cyan(34)
+                let color = match i * 5 / bar_width.max(1) {
+                    0 => 22,
+                    1 => 28,
+                    2 => 34,
+                    3 => 40,
+                    _ => 82,
+                };
+                bar.push_str(&format!("\x1b[38;5;{}m\u{25A0}", color));
+            }
+            if !bar.is_empty() { bar.push_str("\x1b[0m"); }
+            let space = " ".repeat(bar_width.saturating_sub(filled));
             eprintln!(
-                "\x1b[2K  [{}{}{}] {}%  {}/{}",
-                bar, arrow, space, pct, completed, total
+                "\x1b[2K  [{}{}] \x1b[38;5;34m{}%\x1b[0m  {}/{}",
+                bar, space, pct, completed, total
             );
         }
 
         // Line 4: timing
         eprintln!(
-            "\x1b[2K  Elapsed {:.1}s    RPS {:.0}/s    Avg {:.2}ms",
+            "\x1b[2K  Elapsed {:.1}s    RPS \x1b[38;5;34m{:.0}\x1b[0m/s    Avg \x1b[38;5;34m{:.2}\x1b[0mms",
             elapsed.as_secs_f64(),
             rps,
             avg_ms
@@ -100,7 +112,7 @@ pub async fn render_progress(
 
         // Line 5: errors (if any)
         if errors > 0 {
-            eprintln!("\x1b[2K  Errors: {}", errors);
+            eprintln!("\x1b[2K  \x1b[38;5;124mErrors: {}\x1b[0m", errors);
         } else {
             eprintln!("\x1b[2K");
         }
@@ -508,6 +520,8 @@ fn print_slo_legend(p: &Percentiles) {
         }
         println!();
     }
+    println!("  \x1b[38;5;242mNote: SLO levels are relative to this run's own percentile distribution,\x1b[0m");
+    println!("  \x1b[38;5;242mnot absolute latency thresholds. Define custom SLO targets per your system.\x1b[0m");
 }
 
 fn strip_ansi_len(s: &str) -> usize {
