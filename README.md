@@ -2,6 +2,8 @@
 
 HTTP load generator. Fast, zero-copy, Rust. Alternative to hey, oha, wrk.
 
+We built vastar out of necessity. Our team develops high-throughput systems — AI gateway services, real-time simulation engines, streaming data pipelines — and we run long-duration load tests regularly as part of our development cycle. The existing tools fell short in this workflow: hey provides no live progress indicator, so a multi-minute benchmark gives no feedback until completion. oha has a TUI, but it rendered inconsistently across terminals (font issues, aggressive clear screen, emoji fallback problems). For a 30-second or multi-minute benchmark, staring at a frozen terminal wondering if the tool is still running is a poor experience. We needed a load generator that shows live progress cleanly (ASCII-only, terminal-aware), provides SLO-aware analysis out of the box (not just raw numbers), and performs well enough at high concurrency that the tool itself never becomes the bottleneck in our measurements.
+
 ```
 $ vastar -n 3000 -c 300 -m POST -T "application/json" \
     -d '{"prompt":"bench"}' http://localhost:3081/api/gw/trigger
@@ -72,27 +74,27 @@ Insight:
 
 ### Throughput (0B payload, requests/sec)
 
-| Concurrency | vastar | hey | oha |
-|---|---|---|---|
-| c=1 | 93,192 | 40,942 | 71,750 |
-| c=10 | 226,650 | 145,607 | 320,712 |
-| c=200 | 220,311 | 132,650 | 240,421 |
-| c=500 | 408,117 | 71,695 | 234,676 |
-| c=1,000 | 536,758 | 106,861 | 18,329 |
-| c=5,000 | 372,191 | 64,443 | 14,196 |
-| c=10,000 | 336,700 | 61,427 | 38,141 |
+| Concurrency | vastar | hey | oha | Factor |
+|---|---|---|---|---|
+| c=1 | 93,192 | 40,942 | 71,750 | vastar 2.3x vs hey |
+| c=10 | 226,650 | 145,607 | 320,712 | oha 1.4x vs vastar |
+| c=200 | 220,311 | 132,650 | 240,421 | oha 1.1x vs vastar |
+| c=500 | 408,117 | 71,695 | 234,676 | vastar 1.7x vs oha |
+| c=1,000 | 536,758 | 106,861 | 18,329 | vastar 5.0x vs hey |
+| c=5,000 | 372,191 | 64,443 | 14,196 | vastar 5.8x vs hey |
+| c=10,000 | 336,700 | 61,427 | 38,141 | vastar 5.5x vs hey |
 
 ### Throughput (100KB payload, requests/sec)
 
-| Concurrency | vastar | hey | oha |
-|---|---|---|---|
-| c=1 | 40,406 | 20,927 | 30,982 |
-| c=10 | 89,683 | 74,310 | 133,387 |
-| c=100 | 74,229 | 70,411 | 81,466 |
-| c=200 | 69,080 | 74,962 | 68,332 |
-| c=500 | 96,809 | 65,999 | 56,798 |
-| c=1,000 | 89,545 | 57,265 | 18,017 |
-| c=10,000 | 75,224 | 38,281 | 23,113 |
+| Concurrency | vastar | hey | oha | Factor |
+|---|---|---|---|---|
+| c=1 | 40,406 | 20,927 | 30,982 | vastar 1.9x vs hey |
+| c=10 | 89,683 | 74,310 | 133,387 | oha 1.5x vs vastar |
+| c=100 | 74,229 | 70,411 | 81,466 | oha 1.1x vs vastar |
+| c=200 | 69,080 | 74,962 | 68,332 | hey 1.1x vs vastar |
+| c=500 | 96,809 | 65,999 | 56,798 | vastar 1.5x vs hey |
+| c=1,000 | 89,545 | 57,265 | 18,017 | vastar 1.6x vs hey |
+| c=10,000 | 75,224 | 38,281 | 23,113 | vastar 2.0x vs hey |
 
 ### Memory (0B payload, Peak RSS)
 
@@ -104,9 +106,7 @@ Insight:
 
 **Note:** Each tool has different strengths. oha (hyper) excels at c=10-200 with large payloads. hey (Go) is stable across all scenarios. vastar (raw TCP) excels at c=1 and c=500+ where framework overhead matters most. No single tool wins every scenario — choose based on your concurrency range and payload size.
 
-Throughput alone does not determine accuracy. A faster tool may simply have less per-request overhead, while server-side latency (`resp wait`) remains the same across all tools. See [BENCHMARK.md](BENCHMARK.md) for full methodology and analysis.
-
-See [BENCHMARK.md](BENCHMARK.md) for full comparison across 10 concurrency levels and 4 payload sizes.
+Throughput alone does not determine accuracy. A faster tool may simply have less per-request overhead, while server-side latency (`resp wait`) remains the same across all tools. See [BENCHMARK.md](BENCHMARK.md) for full methodology, all 4 payload sizes, and analysis.
 
 ## Features
 
