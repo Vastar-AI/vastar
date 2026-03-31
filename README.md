@@ -226,9 +226,16 @@ vastar is currently an HTTP/1.1 load generator. The roadmap expands it into a **
 |---|---|---|
 | **1. HTTP parity** | HTTPS/TLS, HTTP/2, proxy, redirects, JSON/CSV output, coordinated omission correction | planned |
 | **2. HTTPS + HTTP/2** | rustls, h2 crate, ALPN negotiation, mTLS | planned |
-| **3. Multi-protocol** | gRPC (unary + streaming), WebSocket, QUIC/HTTP/3, MQTT, NATS, Kafka, AMQP, RSocket, GraphQL, raw TCP/UDP. SSE already supported (chunked transfer). | planned |
-| **4. Advanced analysis** | Coordinated omission correction, comparative mode, distributed load generation, custom SLO definitions, CI/CD integration | planned |
+| **3. Multi-protocol** | gRPC, WebSocket, QUIC/HTTP/3, MQTT, NATS, Kafka, AMQP, RSocket, GraphQL, raw TCP/UDP. SSE already supported. | planned |
+| **4. Advanced analysis** | Coordinated omission correction, comparative mode, distributed load gen, custom SLO, CI/CD gates | planned |
 | **5. Ecosystem** | vastar-cloud, HTML report generator, GitHub Action, IDE plugin | planned |
+| **6. AI Engineering** | `vastar ai-bench` — TTFT, TPS, inter-token latency, cost estimation, multi-model, prompt sweep, guardrail overhead | planned |
+| **7. Data layer** | `vastar sql` (Postgres/MySQL), `vastar redis`, `vastar vector` (Qdrant/Milvus), `vastar tsdb`, `vastar search`, `vastar graph` | planned |
+| **8. Storage & cache** | `vastar s3` (MinIO/S3), `vastar cache`, distributed FS | planned |
+| **9. Infrastructure** | `vastar dns`, `vastar gateway`, `vastar mesh`, `vastar serverless`, `vastar edge`, `vastar lb` | planned |
+| **10. Emerging** | `vastar blockchain`, `vastar realtime`, `vastar wasm`, `vastar ml`, `vastar media`, `vastar audio` | planned |
+
+30+ subcommands planned, all sharing the same core engine. See [ROADMAP.md](ROADMAP.md) for full details.
 
 See [ROADMAP.md](ROADMAP.md) for full details including feature-by-feature comparison with hey and oha.
 
