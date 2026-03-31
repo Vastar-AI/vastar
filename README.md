@@ -65,7 +65,7 @@ Insight:
 
 <img src="docs/assets/vastar-bench-output.png" width="50%" />
 
-## Why vastar
+## Measurement Comparison
 
 |  | vastar | hey | oha |
 |---|---|---|---|
