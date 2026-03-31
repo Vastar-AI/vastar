@@ -218,6 +218,20 @@ futures-util  — FuturesUnordered for connection multiplexing
 
 4 crates. No HTTP framework. No TUI framework.
 
+## Roadmap
+
+vastar is currently an HTTP/1.1 load generator. The roadmap expands it into a **multi-protocol load generator** for high-throughput systems.
+
+| Phase | Scope | Status |
+|---|---|---|
+| **1. HTTP parity** | HTTPS/TLS, HTTP/2, proxy, redirects, JSON/CSV output, coordinated omission correction | planned |
+| **2. HTTPS + HTTP/2** | rustls, h2 crate, ALPN negotiation, mTLS | planned |
+| **3. Multi-protocol** | gRPC (unary + streaming), WebSocket, QUIC/HTTP/3, MQTT, NATS, Kafka, AMQP, RSocket, GraphQL, raw TCP/UDP. SSE already supported (chunked transfer). | planned |
+| **4. Advanced analysis** | Coordinated omission correction, comparative mode, distributed load generation, custom SLO definitions, CI/CD integration | planned |
+| **5. Ecosystem** | vastar-cloud, HTML report generator, GitHub Action, IDE plugin | planned |
+
+See [ROADMAP.md](ROADMAP.md) for full details including feature-by-feature comparison with hey and oha.
+
 ## License
 
 MIT OR Apache-2.0

@@ -143,6 +143,7 @@ pub fn print_report(r: &BenchResult) {
 
     println!();
     println!("Summary:");
+    println!();
     println!("  Total:        {:.4} secs", r.total_duration.as_secs_f64());
     if successful == 0 {
         println!("  Requests/sec: 0.00");
@@ -174,6 +175,7 @@ pub fn print_report(r: &BenchResult) {
     // Response time distribution — colored by SLO level (like oha)
     let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout());
     println!("Response time distribution:");
+    println!();
     // Key percentiles highlighted with (ms) — p50, p95, p99, p99.9
     // These 4 are what performance engineers focus on.
     let pcts: &[(&str, f64, bool)] = &[
@@ -208,6 +210,7 @@ pub fn print_report(r: &BenchResult) {
     if !r.histogram.is_empty() {
         let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout());
         println!("Response time histogram:");
+        println!();
         let max_count = r.histogram.iter().map(|b| b.count).max().unwrap_or(1).max(1);
         let bar_max = 48;
         for bucket in &r.histogram {
@@ -232,6 +235,7 @@ pub fn print_report(r: &BenchResult) {
     if !r.status_dist.is_empty() {
         let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout());
         println!("Status code distribution:");
+        println!();
         let mut codes: Vec<_> = r.status_dist.iter().collect();
         codes.sort_by_key(|(k, _)| **k);
         for (code, count) in codes {
@@ -288,6 +292,7 @@ fn print_insight(
     let p95_p50 = if p.p50 > 0.0 { p.p95 / p.p50 } else { 1.0 };
 
     println!("Insight:");
+    println!();
 
     // Error rate — most critical, show first
     if error_rate > 0.0 {
@@ -370,6 +375,7 @@ fn status_info(code: u16, use_color: bool) -> (&'static str, &'static str) {
 
 fn print_details(d: &PhaseDetails) {
     println!("Details (average, fastest, slowest):");
+    println!();
     println!("  req write:\t{:.4} secs, {:.4} secs, {:.4} secs",
         d.req_write.avg, d.req_write.min, d.req_write.max);
     println!("  resp wait:\t{:.4} secs, {:.4} secs, {:.4} secs",
@@ -511,6 +517,7 @@ fn print_slo_legend(p: &Percentiles) {
         .collect();
 
     println!("  SLO:");
+    println!();
     for row in items.chunks(3) {
         print!("  ");
         for item in row {
