@@ -239,6 +239,10 @@ vastar is currently an HTTP/1.1 load generator. The roadmap expands it into a **
 
 See [ROADMAP.md](ROADMAP.md) for full details including feature-by-feature comparison with hey and oha.
 
+## Known Issues
+
+See [ROADMAP.md](ROADMAP.md#known-bugs) for known bugs and workarounds.
+
 ## License
 
 MIT OR Apache-2.0

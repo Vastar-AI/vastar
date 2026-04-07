@@ -8,12 +8,26 @@ All features are subcommands sharing the same core engine (adaptive worker topol
 
 ---
 
+## Known Bugs
+
+| Bug | Description | Workaround | Priority |
+|---|---|---|---|
+| `-H` does not override `-T` default | `-H "Content-Type: application/json"` adds a second content-type header instead of overriding the `-T` default (`text/html`). Server receives both headers — some servers pick the wrong one and return 400. | Use `-T "application/json"` instead of `-H "Content-Type: ..."` | **high** |
+| `read_chunk_size` premature EOF | Under high concurrency with chunked transfer-encoding, `read_chunk_size` returns 0 when `\n` is not in the current buffer, causing premature chunk drain termination. Next request on same keep-alive connection reads stale data → 400. | Increase BufReader capacity or disable keep-alive (`--disable-keepalive`) | **high** |
+
+**Root cause for both**: vastar uses raw TCP with manual HTTP/1.1 parsing. `-H` headers are appended after `-T` default without dedup. Chunked parser doesn't accumulate across buffer boundaries.
+
+**Fix plan**: Deduplicate headers (later `-H` overrides earlier same-name header). Fix `read_chunk_size` to accumulate line across fill_buf calls before parsing hex.
+
+---
+
 ## Phase 1: HTTP Feature Parity
 
 Missing features that hey and/or oha already support.
 
 | Feature | hey | oha | vastar | Priority |
 |---|---|---|---|---|
+| **-H override -T** | **yes** | **yes** | **no (bug)** | **critical** |
 | HTTP/2 | yes | yes | no | high |
 | TLS/HTTPS | yes | yes | no | high |
 | HTTP proxy | yes | yes | no | medium |
