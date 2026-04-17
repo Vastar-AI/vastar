@@ -1,19 +1,25 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::time::Duration;
 
 mod engine;
 mod report;
 mod stats;
+mod sweep;
 
 #[derive(Parser)]
 #[command(
     name = "vastar",
     about = "vastar — HTTP load generator. Fast, zero-copy, Rust.",
-    version
+    version,
+    // Allow `vastar <URL> [flags]` (flat form, unchanged) alongside
+    // `vastar <subcommand> ...`. `subcommand_negates_reqs` tells clap that
+    // when a subcommand is present, positional `url` is not required.
+    subcommand_negates_reqs = true,
 )]
 struct Cli {
-    /// Target URL
-    url: String,
+    /// Target URL (flat bench mode — not needed when a subcommand is used).
+    #[arg(required = true)]
+    url: Option<String>,
 
     /// Number of requests to run. Default is 200.
     #[arg(short = 'n', default_value = "200")]
@@ -78,6 +84,15 @@ struct Cli {
     /// Disable following of HTTP redirects.
     #[arg(long)]
     disable_redirects: bool,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Adaptive concurrency sweep — finds the sweet-spot `c` empirically.
+    Sweep(sweep::SweepArgs),
 }
 
 fn parse_duration(s: &str) -> Duration {
@@ -96,6 +111,19 @@ fn parse_duration(s: &str) -> Duration {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+
+    // Dispatch subcommand if present.
+    if let Some(cmd) = cli.command {
+        match cmd {
+            Command::Sweep(args) => {
+                sweep::run_sweep(args).await;
+                return;
+            }
+        }
+    }
+
+    // Flat bench mode (original behavior).
+    let url = cli.url.expect("URL required for flat bench mode");
 
     // Validate
     if cli.concurrency == 0 {
@@ -160,7 +188,7 @@ async fn main() {
     };
 
     let config = engine::BenchConfig {
-        uri: cli.url,
+        uri: url,
         method: cli.method.to_uppercase(),
         headers,
         body,
@@ -175,6 +203,10 @@ async fn main() {
     let (results, elapsed) = engine::run(config).await;
     let bench_result = stats::aggregate(results, elapsed, cli.concurrency);
     report::print_report(&bench_result);
+
+    // Silence dead-code warnings for flags not yet wired through.
+    let _ = cli.output;
+    let _ = cli.disable_redirects;
 }
 
 /// Minimal base64 encoder — avoids adding a dependency just for auth.

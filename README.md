@@ -110,6 +110,7 @@ Throughput alone does not determine accuracy. A faster tool may simply have less
 
 ## Features
 
+- **`vastar sweep` subcommand** — adaptive concurrency sweet-spot finder. Runs multi-point sweep, detects the knee of the throughput-vs-latency curve, disqualifies points with unhealthy tails or excessive errors, and emits both a pretty table and machine-readable JSON for CI/driver consumption. Paired mode (`--vs REFERENCE_URL`) measures platform overhead vs an upstream and picks the `c` where the gateway/proxy/mesh is still transparent. Domain-agnostic: no workload classifications, no CPU-core heuristics — the curve is measured, not guessed.
 - **11-level SLO color histogram** — ANSI 256-color gradient (dark green to dark red) mapped to percentile thresholds. SLO levels are relative to the current run's own distribution — not absolute latency targets. Organizations like Google, AWS, and others define custom SLO policies per service (e.g., p99 < 200ms for API, p99 < 50ms for cache). Use vastar's SLO as a visual distribution guide, then define your own thresholds in your monitoring platform.
 - **Automated Insight** — latency spread, tail ratio, outlier detection from p50/p95/p99/p99.9
 - **Key percentile highlights** — p50, p95, p99, p99.9 annotated with colored (ms) values
@@ -142,7 +143,12 @@ cargo build --release
 ## Usage
 
 ```
-Usage: vastar [OPTIONS] <URL>
+Usage: vastar [OPTIONS] <URL>            # flat bench mode (default)
+       vastar <COMMAND> [OPTIONS]        # subcommand mode
+
+Commands:
+  sweep  Adaptive concurrency sweep — finds the sweet-spot `c` empirically
+  help   Print this message or the help of the given subcommand(s)
 
 Options:
   -n <REQUESTS>              Number of requests [default: 200]
@@ -189,6 +195,87 @@ vastar -a user:pass http://localhost:8080/
 vastar -m POST -T "application/json" -D payload.json http://localhost:8080/api
 ```
 
+## `vastar sweep` — Adaptive Concurrency Sweet-Spot Finder
+
+Finding the right `-c` for a given endpoint is usually an operator guess. Too low and throughput is understated; too high and queueing explodes the tail without warning. `vastar sweep` runs multiple concurrency levels against the same URL, detects the knee of the throughput-vs-latency curve, and picks the smallest `c` that still delivers near-peak throughput with a healthy tail.
+
+```bash
+# Auto-sweep (log-spaced 10..1000), pick knee at 95% of peak
+vastar sweep -n 2000 --repeats 3 http://localhost:8080/api
+
+# Explicit concurrency list
+vastar sweep --conc "10,50,100,500,1000" -n 2000 http://localhost:8080/api
+
+# Log-spaced range
+vastar sweep --conc "10..1000:log=6" -n 2000 http://localhost:8080/api
+
+# Refine: coarse sweep, then bracket ±50% around winner for finer resolution
+vastar sweep --conc auto --refine -n 2000 http://localhost:8080/api
+
+# Emit JSON for script consumption (downstream bench drivers, CI gates)
+vastar sweep -o json --conc auto -n 2000 http://localhost:8080/api \
+  > /tmp/sweep.json
+
+BENCH_C=$(jq -r .sweet_spot.concurrency /tmp/sweep.json)
+```
+
+### Paired mode — platform overhead vs upstream
+
+For gateways, proxies, meshes, or any service that fronts an upstream, a single-endpoint sweep can be misleading — the target's curve can look healthy even when *your platform* is the bottleneck, simply because the upstream is doing the heavy lifting. Paired mode runs both endpoints at each concurrency and picks the sweet spot where the platform still stays close to the upstream's own performance:
+
+```bash
+vastar sweep \
+  --vs http://localhost:4545/v1/chat/completions \    # reference (upstream)
+  --max-overhead-pct 25 \                             # DQ when target p99 >25% of ref
+  -m POST -T application/json \
+  -d '{"prompt":"bench"}' \
+  http://localhost:3080/trigger                       # target (gateway)
+```
+
+For sweeping many gateway endpoints against the same upstream, cache the reference once and reuse:
+
+```bash
+# Once: cache upstream curve
+vastar sweep -o json --conc auto -n 2000 --repeats 3 \
+  -m POST -T application/json -d '{"prompt":"bench"}' \
+  http://localhost:4545/v1/chat/completions > /tmp/upstream.json
+
+# Many times: reuse for each gateway test, no re-sweep
+vastar sweep --ref-from-json /tmp/upstream.json --max-overhead-pct 20 \
+  ... http://localhost:3080/trigger
+```
+
+### Sweep flags
+
+```
+vastar sweep [OPTIONS] <URL>
+
+  --conc <SPEC>              "10,50,100,500" | "10..1000:log=6" | "10..200:step=20" | "auto"
+  --refine                   Bracket ±50% around coarse winner for finer resolution
+  --repeats <N>              Run each c-level N times, take median [default: 1]
+
+  --pick <knee|score>        Selection algorithm [default: knee]
+  --knee-ratio <0.95>        Smallest c reaching this fraction of peak rps
+  --baseline-c <1>           Concurrency used as reference for tail-degradation check
+
+  --max-spread <4.0>         DQ if p99/p50 > this
+  --max-p999-ratio <8.0>     DQ if p99.9/p50 > this
+  --max-tail-mult <3.0>      DQ if p99 > baseline_p99 × this
+  --max-errors <0.01>        DQ if error_rate > this (fraction)
+
+  --vs <URL>                 Reference endpoint (paired mode)
+  --vs-method / --vs-body / --vs-content-type   Override per-reference
+  --ref-from-json <FILE>     Load reference curve from prior sweep JSON
+  --max-overhead-pct <25>    DQ if target overhead vs reference > this%
+  --max-rps-deficit-pct <50> DQ if target rps deficit vs reference > this%
+
+  -o <text|json|ndjson>      Output format
+  --json-path <FILE>         Also write JSON to file
+
+  # Pass-through to each sub-benchmark (same as flat vastar):
+  -n / -z / -m / -d / -D / -T / -H / -A / -a / -t / --disable-keepalive / --disable-compression
+```
+
 ## Architecture
 
 <img src="docs/assets/architecture.svg" width="100%" />
@@ -224,6 +311,7 @@ vastar is currently an HTTP/1.1 load generator. The roadmap expands it into a **
 
 | Phase | Scope | Status |
 |---|---|---|
+| **0. Concurrency sweep** | `vastar sweep` — adaptive sweet-spot finder, knee detection, paired-mode overhead comparison, JSON/NDJSON output | **shipped v0.2.0** |
 | **1. HTTP parity** | HTTPS/TLS, HTTP/2, proxy, redirects, JSON/CSV output, coordinated omission correction | planned |
 | **2. HTTPS + HTTP/2** | rustls, h2 crate, ALPN negotiation, mTLS | planned |
 | **3. Multi-protocol** | gRPC, WebSocket, QUIC/HTTP/3, MQTT, NATS, Kafka, AMQP, RSocket, GraphQL, raw TCP/UDP. SSE already supported. | planned |

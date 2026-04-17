@@ -21,6 +21,177 @@ All features are subcommands sharing the same core engine (adaptive worker topol
 
 ---
 
+## Phase 0: Concurrency Sweet-Spot Sweep (`vastar sweep`) — **SHIPPED in v0.2.0**
+
+Benchmark users today have to hand-tune `-c` per endpoint: too low and they under-report throughput, too high and queueing explodes the tail — and the right value differs by workload (sub-ms echo vs I/O-bound SQL vs streaming LLM). Every driver script (VIL testsuite, CI harnesses) ends up embedding its own ad-hoc sweep loop.
+
+`vastar sweep` is a **domain-agnostic** subcommand that runs an adaptive concurrency sweep against any endpoint vastar already supports and emits the empirically best `c` (plus the full curve) as text and JSON. Script-callable, cache-friendly, zero workload assumptions.
+
+### Design principles
+
+- **Domain-agnostic** — no hardcoded workload classes. Caller passes URL + method + payload, algorithm treats every endpoint identically.
+- **Evidence-based** — knee detected empirically from measured `rps` / `p99` curve, not from CPU-core heuristics or preset tables.
+- **Noise-robust** — multi-repeat with median aggregation; disqualification gates for unstable runs.
+- **Script-friendly** — first-class JSON output with stable schema so downstream tools (CI gates, bench drivers, dashboards) can consume without parsing text.
+- **Reuses core engine** — no refactor needed; `sweep` orchestrates multiple `engine::run()` invocations with different `-c` values and aggregates results.
+
+### Invocation
+
+```
+vastar sweep [OPTIONS] <URL>
+
+  # Concurrency plan
+  --conc <SPEC>             "10,50,100,500" | "10..1000:log=6" | "10..200:step=20" | "auto" (default)
+  --refine                  After coarse sweep, bracket ±50% around winner and sweep 4 more points
+  --repeats <N>             Repeat each c-level N times, take median (default: 1)
+
+  # Picking strategy
+  --pick <knee|score>       Selection algorithm (default: knee)
+  --knee-ratio <0.95>       Smallest c reaching this fraction of peak rps
+  --baseline-c <1>          Concurrency used as reference for tail-degradation check
+
+  # Disqualification gates
+  --max-spread <4.0>        DQ if p99/p50 > this
+  --max-p999-ratio <8.0>    DQ if p99.9/p50 > this
+  --max-errors <0.01>       DQ if error_rate > this
+  --max-tail-mult <3.0>     DQ if p99 > baseline_p99 × this
+
+  # Output
+  -o, --output <FMT>        text | json | ndjson | csv (default: text)
+  --json-path <FILE>        Also write JSON to file (text still prints to stdout)
+
+  # Pass-through to each sub-benchmark (reuses existing vastar flags)
+  -n, -z, -m, -d, -D, -T, -H, -A, -a, -t, --disable-keepalive, --disable-compression
+```
+
+### Algorithm
+
+1. **Calibrate baseline** — run once at `--baseline-c` (default 1) to capture uncontended `p50`/`p99`. Defines "healthy tail" per-endpoint instead of relying on absolute thresholds.
+2. **Coarse sweep** — resolve `--conc` spec to concrete levels, run each (with optional repeats + median), tag each point `pass` or `DQ(reason)`.
+3. **Refine (optional)** — pick current winner, bracket `[winner × 0.5, winner × 1.5]`, sweep 4 more points, merge.
+4. **Pick sweet spot** —
+    - **knee mode (default)**: smallest `c` where `rps ≥ knee_ratio × peak_rps` **and** `p99 ≤ baseline_p99 × max_tail_mult`. Falls back to `argmax(rps)` if neither gate met.
+    - **score mode**: `argmax(rps / (p99/p50)²)` — throughput weighted by consistency² (original VIL testsuite formula).
+5. **Emit** — pretty table + highlighted sweet spot to stdout; structured JSON to file/stdout for downstream consumption.
+
+### Output JSON contract (`schema_version: "1.0"`)
+
+```json
+{
+  "schema_version": "1.0",
+  "params": { "url": "...", "method": "POST", "baseline_c": 1, "pick": "knee", ... },
+  "machine": { "cpu_cores_physical": 8, "cpu_cores_logical": 16, "ram_mb": 20000 },
+  "baseline": { "concurrency": 1, "rps": 3200, "p50_ms": 0.31, "p99_ms": 0.45 },
+  "sweep_points": [
+    { "concurrency": 10, "repeats": 3, "rps": 6420, "p50_ms": 1.55, "p95_ms": 2.30,
+      "p99_ms": 3.10, "p999_ms": 3.80, "error_rate": 0.0, "disqualified": null, "score": 2660 },
+    { "concurrency": 1000, "disqualified": "spread=2.8" }
+  ],
+  "sweet_spot": {
+    "concurrency": 180, "rps": 35800, "p50_ms": 4.55, "p99_ms": 10.2,
+    "method": "knee",
+    "reasoning": "smallest c reaching 93.7% of peak (38200 @ c=400), p99 within tail gate",
+    "peak_rps": 38200, "peak_concurrency": 400
+  },
+  "notes": ["refine=on", "repeats=3"]
+}
+```
+
+### Text output (sample)
+
+```
+━━━ vastar sweep — POST http://localhost:10003/api/fx/convert ━━━
+
+  Calibration (c=1):      rps=3200     p50=0.31ms   p99=0.45ms
+  Machine:                8 phys / 16 log cores, 20 GB RAM
+
+  Coarse sweep (6 points, 3 repeats each, median):
+    c       rps          p50       p95       p99       p99.9     score    verdict
+    ─────   ─────────    ──────    ──────    ──────    ──────    ─────    ───────
+    10      6420         1.55ms    2.30ms    3.10ms    3.80ms    2660
+    50      18900        2.64ms    4.20ms    5.80ms    7.20ms    4420
+    150     34100        4.39ms    7.10ms    9.80ms    12.3ms    6840
+    400     38200        10.4ms    28.0ms    41.0ms    58.0ms    590      high tail
+    1000    31500        31.8ms    68.0ms    89.0ms    125ms     —        DISQ (spread=2.8)
+
+  Refine around c=150 (bracket c=75..225):
+    c       rps          p50       p95       p99       p99.9
+    100     29200        3.42ms    5.80ms    7.90ms    10.1ms
+    120     32100        3.75ms    6.30ms    8.40ms    11.0ms
+    180     35800        4.55ms    7.40ms    10.2ms    13.1ms   ← best
+    250     37500        5.89ms    10.5ms    14.3ms    17.8ms
+
+  ━━━ Sweet spot: c=180 ━━━
+  Throughput:   35800 req/s   (93.7% of peak 38200 @ c=400)
+  Latency p99:  10.2ms        (22× baseline c=1, within gates)
+  Strategy:     knee@95%
+  Reasoning:    smallest c reaching ≥95% of peak throughput with healthy tail
+```
+
+### CLI backward compatibility
+
+Introduces the first subcommand into the CLI. Existing flat-form invocations (`vastar -c 100 -n 2000 URL`) remain supported via clap's `subcommand_negates_reqs` + optional subcommand pattern — no breakage for existing callers (VIL testsuite, docs, CI pipelines).
+
+### Downstream integration example
+
+```bash
+SWEEP=$(vastar sweep -o json --repeats 3 -n 2000 \
+    -m POST -T application/json -d '{"prompt":"bench"}' \
+    http://localhost:3080/trigger)
+
+BENCH_C=$(echo "$SWEEP" | jq -r .sweet_spot.concurrency)
+```
+
+### Explicit non-goals
+
+- **Thermal / CPU-governor / FD-limit probing** — OS/mesin-specific; stays out of a domain-agnostic bench tool
+- **Workload auto-classification** — caller knows the domain; `--pick` is the only knob
+- **Per-category presets** — shell out multiple `vastar sweep` invocations instead; keeps the tool lean
+- **Result cache persistence** — cache is the caller's concern (dump `--json-path` and source it later)
+
+### Paired sweep — platform-overhead mode
+
+Single-endpoint sweep answers "what c saturates *this* URL". For platforms that front an upstream (API gateways, service meshes, sidecars, provision servers fronting simulators), that number can be misleading: the target looks healthy at high c simply because the upstream is doing the heavy lifting, while the platform itself has already become the bottleneck. Paired sweep catches that explicitly.
+
+```
+vastar sweep \
+  --vs http://localhost:4545/v1/chat/completions \     # reference (upstream)
+  --max-overhead-pct 25 \                              # DQ when target p99 >25% of ref
+  -m POST -T application/json \
+  -d '{"prompt":"bench"}' \
+  http://localhost:3080/trigger                        # target (gateway)
+```
+
+At each concurrency level the engine runs both endpoints (reference first for stable warm-up, then target) and computes:
+
+- `overhead_pct = (target_p99 - ref_p99) / ref_p99 × 100` — how much extra latency the platform adds at this load
+- `rps_deficit_pct = (ref_rps - target_rps) / ref_rps × 100` — whether the platform keeps up with the upstream's own throughput
+
+Points failing either gate (`--max-overhead-pct`, default 25%; `--max-rps-deficit-pct`, default 50%) are DQ'd. Sweet spot picker then chooses among qualified points — typically surfacing a meaningfully *lower* `c` than a pure single-endpoint sweep, because the overhead gate exposes where the platform transitions from "transparent" to "bottleneck".
+
+**Reference caching** — `--ref-from-json <FILE>` loads a reference curve from a prior `vastar sweep -o json` result, skipping all reference measurements. Useful for sweeping many gateway endpoints against the same upstream:
+
+```
+# Once: cache upstream curve
+vastar sweep -o json --conc auto -n 2000 --repeats 3 \
+  -m POST -T application/json -d '{"prompt":"bench"}' \
+  http://localhost:4545/v1/chat/completions > /tmp/upstream.json
+
+# Many times: reuse for each gateway test, no re-sweep
+vastar sweep --ref-from-json /tmp/upstream.json --max-overhead-pct 20 \
+  ... http://localhost:3080/trigger
+vastar sweep --ref-from-json /tmp/upstream.json --max-overhead-pct 20 \
+  ... http://localhost:3081/api/gw/trigger
+```
+
+JSON output schema v1.0 extends with a top-level `paired` block (reference URL/method/source, baseline, gate thresholds) and per-sweep-point `reference` / `overhead_pct` / `rps_deficit_pct` fields. Single-endpoint runs remain backward-compatible — no `paired` block emitted.
+
+### Why Phase 0 (before Phase 1)
+
+Every other bench feature — HTTP/2, TLS, gRPC, AI inference, SQL — compounds value only when the operator knows how to drive it correctly. Fixing `-c` as an operator guess is the most leveraged improvement: one feature that upgrades every existing and future subcommand. This is also the feature that unlocks clean CI gates (stable sweet spot → stable SLO threshold).
+
+---
+
 ## Phase 1: HTTP Feature Parity
 
 Missing features that hey and/or oha already support.
@@ -526,6 +697,7 @@ Target: Whisper, TTS engines, speech-to-text services
 ## Subcommand Summary
 
 ```
+vastar sweep       Adaptive concurrency sweep — finds sweet-spot c (Phase 0)
 vastar http        HTTP/1.1 load generator (current)
 vastar ai-bench    LLM inference: TTFT, TPS, cost, multi-model
 vastar grpc        gRPC unary + streaming
