@@ -994,19 +994,50 @@ fn pick_sweet_spot(points: &[SweepPoint], baseline: &SweepPoint, args: &SweepArg
             format!("argmax(rps / (p99/p50)²) = {:.0}", p.score),
         ),
         (None, _) => {
-            // All points failed the chosen strategy's gates. Fall back to
-            // argmax(rps) over qualified; if qualified is empty, argmax over
-            // all points so we still report something actionable.
-            let fallback = qualified.iter()
-                .max_by(|a, b| a.rps.partial_cmp(&b.rps).unwrap_or(std::cmp::Ordering::Equal))
-                .copied()
-                .or_else(|| points.iter().max_by(|a, b| a.rps.partial_cmp(&b.rps).unwrap_or(std::cmp::Ordering::Equal)));
+            // All qualified points fail the chosen strategy's gates. Pick
+            // depends on which information we have:
+            //
+            //   Paired mode (overhead_pct available on any point):
+            //     pick point with SMALLEST overhead_pct — that is the
+            //     least-stressful-for-the-gateway c. Picking argmax(rps)
+            //     in paired-mode always lands on the most-overloaded point
+            //     (the one with the MOST fast 502s inflating rps).
+            //
+            //   Non-paired mode:
+            //     keep the historical argmax(rps) behavior — it's the
+            //     expected "pick the fastest" fallback when only target
+            //     data is available.
+            let has_overhead = points.iter().any(|p| p.overhead_pct.is_some());
+            let fallback: Option<&SweepPoint> = if has_overhead {
+                // Lowest overhead_pct first; ties broken by smaller c
+                // (safer, less resource pressure).
+                points.iter()
+                    .filter(|p| p.overhead_pct.is_some())
+                    .min_by(|a, b| {
+                        let oa = a.overhead_pct.unwrap();
+                        let ob = b.overhead_pct.unwrap();
+                        oa.partial_cmp(&ob).unwrap_or(std::cmp::Ordering::Equal)
+                            .then(a.c.cmp(&b.c))
+                    })
+            } else {
+                qualified.iter()
+                    .max_by(|a, b| a.rps.partial_cmp(&b.rps).unwrap_or(std::cmp::Ordering::Equal))
+                    .copied()
+                    .or_else(|| points.iter().max_by(|a, b| a.rps.partial_cmp(&b.rps).unwrap_or(std::cmp::Ordering::Equal)))
+            };
             match fallback {
-                Some(p) => (
-                    p,
-                    "fallback",
-                    "no point met primary strategy gates; argmax(rps) over all samples".into(),
-                ),
+                Some(p) => {
+                    let reason = if has_overhead {
+                        let ohd = p.overhead_pct.unwrap_or(0.0);
+                        format!(
+                            "no point met primary gates; paired-mode fallback = smallest overhead ({:+.1}%)",
+                            ohd,
+                        )
+                    } else {
+                        "no point met primary strategy gates; argmax(rps) over all samples".into()
+                    };
+                    (p, "fallback", reason)
+                }
                 None => {
                     return SweetSpot {
                         concurrency: 0, rps: 0.0, p50_ms: 0.0, p99_ms: 0.0,
