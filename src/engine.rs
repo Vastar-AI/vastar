@@ -414,54 +414,44 @@ async fn do_one_request(
 
 /// Read response with timing: returns (status, size, wait_ns, read_ns).
 /// wait_ns = time to first byte; read_ns = time to parse + drain body.
+///
+/// Header + chunk-size parsing uses `read_until(b'\n', ...)` which correctly
+/// handles lines spanning multiple `fill_buf` batches (TCP packet boundaries).
+/// Prior implementation used `fill_buf` + `find_header_end` / `position('\n')`
+/// and, when the delimiter was missing, incorrectly `consume(len)` + bailed —
+/// discarding partial header/chunk-size bytes and reporting spurious errors
+/// on SSE keep-alive streams (where chunk-size lines are tiny and frequently
+/// get cut at buffer boundaries).
 async fn read_response_timed(
     reader: &mut BufReader<TcpStream>,
 ) -> Result<(u16, u64, u64, u64), ()> {
-    // Phase 1: wait for first data
+    // Phase 1: wait for first line (status line) → TTFB
     let tw = Instant::now();
-    let header_end;
-    loop {
-        let buf = reader.fill_buf().await.map_err(|_| ())?;
-        if buf.is_empty() {
-            return Err(());
-        }
-        match find_header_end(buf) {
-            Some(pos) => {
-                header_end = pos;
-                break;
-            }
-            None => {
-                // Need more data (rare — headers usually < 32KB)
-                let len = buf.len();
-                reader.consume(len);
-            }
-        }
-    }
-
+    let mut line_buf = Vec::with_capacity(128);
+    let n = reader.read_until(b'\n', &mut line_buf).await.map_err(|_| ())?;
+    if n == 0 { return Err(()); }
     let wait_ns = tw.elapsed().as_nanos() as u64;
 
-    // Phase 2: parse headers + drain body (read phase)
+    // Phase 2: parse status line + remaining headers
     let tr = Instant::now();
-    let buf = reader.fill_buf().await.map_err(|_| ())?;
-    let headers = &buf[..header_end];
-
-    if headers.len() < 12 {
-        return Err(());
-    }
-    let status: u16 = std::str::from_utf8(&headers[9..12])
+    if line_buf.len() < 12 { return Err(()); }
+    let status: u16 = std::str::from_utf8(&line_buf[9..12])
         .map_err(|_| ())?
         .parse()
         .map_err(|_| ())?;
 
     let mut content_length: Option<usize> = None;
     let mut is_chunked = false;
-    let mut pos = 0;
-    while pos < header_end {
-        let line_end = match headers[pos..].iter().position(|&b| b == b'\n') {
-            Some(i) => pos + i + 1,
-            None => header_end,
-        };
-        let line = &headers[pos..line_end];
+
+    loop {
+        line_buf.clear();
+        let n = reader.read_until(b'\n', &mut line_buf).await.map_err(|_| ())?;
+        if n == 0 { return Err(()); }
+        // Empty line (just CRLF or LF) marks end of headers.
+        if line_buf.as_slice() == b"\r\n" || line_buf.as_slice() == b"\n" {
+            break;
+        }
+        let line = line_buf.as_slice();
         if line.len() > 16 && starts_with_ci(line, b"content-length:") {
             let val = std::str::from_utf8(&line[15..]).unwrap_or("").trim();
             content_length = val.parse().ok();
@@ -471,27 +461,15 @@ async fn read_response_timed(
                 is_chunked = true;
             }
         }
-        pos = line_end;
     }
-
-    let buf_len = buf.len();
-    let response_header_size = header_end + 4;
-    let body_already = buf_len - response_header_size;
 
     // Phase 3: drain body
     let size = if let Some(cl) = content_length {
-        if body_already >= cl {
-            reader.consume(response_header_size + cl);
-        } else {
-            reader.consume(buf_len);
-            drain_exact(reader, cl - body_already).await?;
-        }
+        drain_exact(reader, cl).await?;
         cl as u64
     } else if is_chunked {
-        reader.consume(response_header_size);
         drain_chunked(reader).await?
     } else {
-        reader.consume(response_header_size);
         0
     };
     let read_ns = tr.elapsed().as_nanos() as u64;
@@ -501,17 +479,6 @@ async fn read_response_timed(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-#[inline]
-fn find_header_end(buf: &[u8]) -> Option<usize> {
-    if buf.len() < 4 { return None; }
-    for i in 0..buf.len() - 3 {
-        if buf[i] == b'\r' && buf[i + 1] == b'\n' && buf[i + 2] == b'\r' && buf[i + 3] == b'\n' {
-            return Some(i);
-        }
-    }
-    None
-}
 
 #[inline]
 fn starts_with_ci(haystack: &[u8], needle: &[u8]) -> bool {
@@ -551,32 +518,23 @@ async fn drain_chunked(reader: &mut BufReader<TcpStream>) -> Result<u64, ()> {
 }
 
 async fn read_chunk_size(reader: &mut BufReader<TcpStream>) -> Result<usize, ()> {
-    let buf = reader.fill_buf().await.map_err(|_| ())?;
-    if buf.is_empty() { return Err(()); }
-    if let Some(nl) = buf.iter().position(|&b| b == b'\n') {
-        let hex = std::str::from_utf8(&buf[..nl])
-            .unwrap_or("0")
-            .trim_matches(|c: char| c == '\r' || c == '\n' || c == ' ')
-            .split(';')
-            .next()
-            .unwrap_or("0");
-        let size = usize::from_str_radix(hex, 16).unwrap_or(0);
-        reader.consume(nl + 1);
-        Ok(size)
-    } else {
-        let len = buf.len();
-        reader.consume(len);
-        Ok(0)
-    }
+    // Use read_until to correctly handle chunk-size lines that span TCP
+    // packet / BufReader refill boundaries. Prior impl consumed partial
+    // digits and returned 0, causing spurious "last chunk" termination.
+    let mut line = Vec::with_capacity(32);
+    let n = reader.read_until(b'\n', &mut line).await.map_err(|_| ())?;
+    if n == 0 { return Err(()); }
+    let hex = std::str::from_utf8(&line)
+        .unwrap_or("0")
+        .trim_matches(|c: char| c == '\r' || c == '\n' || c == ' ')
+        .split(';')
+        .next()
+        .unwrap_or("0");
+    Ok(usize::from_str_radix(hex, 16).unwrap_or(0))
 }
 
 async fn skip_line(reader: &mut BufReader<TcpStream>) -> Result<(), ()> {
-    let buf = reader.fill_buf().await.map_err(|_| ())?;
-    if let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-        reader.consume(pos + 1);
-    } else {
-        let len = buf.len();
-        reader.consume(len);
-    }
+    let mut sink = Vec::with_capacity(8);
+    reader.read_until(b'\n', &mut sink).await.map_err(|_| ())?;
     Ok(())
 }
