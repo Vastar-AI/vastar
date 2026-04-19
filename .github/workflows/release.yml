@@ -116,6 +116,7 @@ jobs:
         id: shas
         run: |
           echo "linux=$(grep 'x86_64-unknown-linux-gnu' SHA256SUMS.txt | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "linux_arm=$(grep 'aarch64-unknown-linux-gnu' SHA256SUMS.txt | awk '{print $1}')" >> "$GITHUB_OUTPUT"
           echo "mac_intel=$(grep 'x86_64-apple-darwin' SHA256SUMS.txt | awk '{print $1}')" >> "$GITHUB_OUTPUT"
           echo "mac_arm=$(grep 'aarch64-apple-darwin' SHA256SUMS.txt | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
@@ -149,8 +150,13 @@ jobs:
             end
 
             on_linux do
-              url "${BASE}/vastar-${TAG}-x86_64-unknown-linux-gnu.tar.gz"
-              sha256 "${{ steps.shas.outputs.linux }}"
+              if Hardware::CPU.arm?
+                url "${BASE}/vastar-${TAG}-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${{ steps.shas.outputs.linux_arm }}"
+              else
+                url "${BASE}/vastar-${TAG}-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${{ steps.shas.outputs.linux }}"
+              end
             end
 
             def install
