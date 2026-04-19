@@ -499,25 +499,32 @@ futures-util  — FuturesUnordered for connection multiplexing
 
 ## Roadmap
 
-vastar is currently an HTTP/1.1 load generator. The roadmap expands it into a **multi-protocol load generator** for high-throughput systems.
+vastar is experimental. The table below is ordered by **priority**, not
+delivery schedule — no dates. An item ships when it is ready and when we
+have validated it against real workloads. The long-term ambition is a
+**universal benchmark tool**: one binary covering HTTP, streaming, gRPC,
+WebSockets, databases, message queues, storage, edge, AI inference, and
+more — all sharing the same core engine, progress UX, and SLO analysis.
 
-| Phase | Scope | Status |
+| Priority | Scope | Status |
 |---|---|---|
-| **0. Concurrency sweep** | `vastar sweep` — adaptive sweet-spot finder, knee detection, paired-mode overhead comparison, JSON/NDJSON output | **shipped v0.2.0** |
-| **1. HTTP parity** | HTTPS/TLS, HTTP/2, proxy, redirects, JSON/CSV output, coordinated omission correction | planned |
-| **2. HTTPS + HTTP/2** | rustls, h2 crate, ALPN negotiation, mTLS | planned |
-| **3. Multi-protocol** | gRPC, WebSocket, QUIC/HTTP/3, MQTT, NATS, Kafka, AMQP, RSocket, GraphQL, raw TCP/UDP. SSE already supported. | planned |
-| **4. Advanced analysis** | Coordinated omission correction, comparative mode, distributed load gen, custom SLO, CI/CD gates | planned |
-| **5. Ecosystem** | vastar-cloud, HTML report generator, GitHub Action, IDE plugin | planned |
-| **6. AI Engineering** | `vastar ai-bench` — TTFT, TPS, inter-token latency, cost estimation, multi-model, prompt sweep, guardrail overhead | planned |
-| **7. Data layer** | `vastar sql` (Postgres/MySQL), `vastar redis`, `vastar vector` (Qdrant/Milvus), `vastar tsdb`, `vastar search`, `vastar graph` | planned |
-| **8. Storage & cache** | `vastar s3` (MinIO/S3), `vastar cache`, distributed FS | planned |
-| **9. Infrastructure** | `vastar dns`, `vastar gateway`, `vastar mesh`, `vastar serverless`, `vastar edge`, `vastar lb` | planned |
-| **10. Emerging** | `vastar blockchain`, `vastar realtime`, `vastar wasm`, `vastar ml`, `vastar media`, `vastar audio` | planned |
+| **P1. Fix what we already ship** | `-H` override, p99 tail at ≥1 MB streaming, 100 KB non-streaming regression, TLS/rustls, HTTP/2, coordinated-omission correction | open |
+| **P2. `vastar sweep`** | Adaptive sweet-spot finder, knee detection, paired-mode overhead, JSON/NDJSON output | **shipped v0.2.0+** |
+| **P3. `vastar insight`** | AI-assisted report analysis via CLI. Provider-agnostic (user brings API key). Config accepts `--context-docs`, `--baseline`, `--slo-target`, service metadata, topology hints, redaction. | planned |
+| **P4. Streaming niche** | Per-chunk timing, TTFB, final-chunk latency, chunk-count distribution. `vastar ai-bench` — TTFT, TPS, inter-token latency, token cost, multi-model, prompt-length sweep, guardrail overhead. | planned |
+| **P5. gRPC + WebSocket** | `vastar grpc` (unary, server/client/bidi streaming, protobuf, reflection). `vastar ws` (connection load, message throughput, echo latency, binary/text frames). | planned |
+| **P6. QUIC / HTTP/3** | QUIC transport, HTTP/3 over QUIC streams, connection migration testing. | planned |
+| **P7. Observability + CI** | Prometheus push, OpenTelemetry export, CI exit codes on SLO failure, scenario scripting. | planned |
+| **P8. Data layer** | `vastar sql` (Postgres/MySQL/Cockroach/TiDB), `vastar redis`, `vastar vector` (Qdrant/Milvus/pgvector), `vastar tsdb`, `vastar search`, `vastar graph`. | planned |
+| **P9. Message queues + eventing** | `vastar mqtt`, `vastar kafka`, `vastar nats`, `vastar amqp`, `vastar rsocket`, `vastar graphql`. | planned |
+| **P10. Storage + cache** | `vastar s3` (S3/MinIO/GCS/Azure Blob), `vastar cache`, distributed FS (HDFS/Ceph/SeaweedFS). | planned |
+| **P11. Infrastructure** | `vastar gateway`, `vastar mesh`, `vastar dns`, `vastar serverless` (Lambda/Workers), `vastar lb`, `vastar edge`. | planned |
+| **P12. Emerging systems** | `vastar blockchain`, `vastar realtime`, `vastar wasm`, `vastar ml`, `vastar media`, `vastar audio`, `vastar tcp`, `vastar udp`. | planned |
+| **P13. Ecosystem** | `vastar-report` (HTML), `vastar-compare` (JSON diff), distributed mode, IDE plugin, GitHub Action. | planned |
 
-30+ subcommands planned, all sharing the same core engine. See [ROADMAP.md](ROADMAP.md) for full details.
-
-See [ROADMAP.md](ROADMAP.md) for full details including feature-by-feature comparison with hey and oha.
+30+ subcommands planned, all sharing the same core engine. See
+[ROADMAP.md](ROADMAP.md) for full details — capability tables, context
+inputs for `vastar insight`, per-protocol target lists, and non-goals.
 
 ## Known Issues
 
