@@ -1,8 +1,68 @@
 # vastar
 
-HTTP load generator. Fast, zero-copy, Rust. Alternative to hey, oha, wrk.
+**Status: experimental.** An HTTP load generator written in Rust. Raw TCP,
+zero-copy buffer handling, tokio-based async runtime. A newcomer in an
+ecosystem that already has battle-tested, reputation-heavy tools — we are
+not claiming to replace any of them.
 
-We built vastar out of necessity. Our team develops high-throughput systems — AI gateway services, real-time simulation engines, streaming data pipelines — and we run long-duration load tests regularly as part of our development cycle. The existing tools fell short in this workflow: hey provides no live progress indicator, so a multi-minute benchmark gives no feedback until completion. oha has a TUI, but it rendered inconsistently across terminals (font issues, aggressive clear screen, emoji fallback problems). For a 30-second or multi-minute benchmark, staring at a frozen terminal wondering if the tool is still running is a poor experience. We needed a load generator that shows live progress cleanly (ASCII-only, terminal-aware), provides SLO-aware analysis out of the box (not just raw numbers), and performs well enough at high concurrency that the tool itself never becomes the bottleneck in our measurements.
+### TL;DR of our benchmarks
+
+- **`wrk` wins throughput** at every payload size we tested.
+- **`oha` wins tail latency** — particularly at streaming payloads ≥ 500 KB,
+  where its `hyper`-based flow control outperforms everything else we
+  measured.
+- **vastar does not win either category outright.** Its current niche is
+  a narrow one: at 1 MB chunked streaming, vastar matches `wrk` on
+  throughput (99.7 %) while offering built-in SLO-coloured histogram,
+  live progress display, and an adaptive concurrency finder (`vastar
+  sweep`). Outside that niche, use `wrk` or `oha`.
+
+The industry standards are `wrk` / `wrk2` (used by TechEmpower Framework
+Benchmarks) for maximum throughput measurement, and `oha` for a beautifully
+engineered Rust load generator with strict HTTP parsing that has caught
+real protocol bugs for us — see the "Credit where it is due" section
+below. For different niches there are also `hey`, `vegeta`, `k6`. If you
+need a production-grade load generator today, use one of those. vastar is
+a small-team project we ship publicly for the specific workload we
+encountered repeatedly: **long-running streaming responses with large
+payloads** (SSE token streams, chunked JSON batches, multi-hundred-KB to
+multi-MB responses) where we wanted tighter tail-latency measurement and
+a bench UX that is comfortable to watch for minutes at a time.
+
+### Why we wrote it
+
+While building AI-gateway services, real-time simulation engines, and
+streaming data pipelines, we ran long-duration load tests daily. The
+existing tools covered most of our needs. Two small preferences pushed us
+to experiment:
+
+- **Live progress feedback on multi-minute runs** — we wanted an
+  ASCII-only, minimal-redraw live display that could be left running on
+  a remote SSH session without surprises from terminal/font variation on
+  our specific stack. This is a preference, not a criticism of any
+  existing tool — different teams have different terminal environments.
+- **Distribution-aware analysis in the default output** — we wanted the
+  p50/p95/p99/p99.9 percentile story and a colored histogram to appear in
+  the terminal by default, without flags or post-processing.
+
+Everything else vastar offers — HTTP/1.1 parser, raw TCP client, chunked
+streaming reader — we wrote because we needed a substrate for those UX
+goals. It turned out to be reasonably fast on streaming workloads
+(benchmarks below), but that was a side-effect, not a starting goal.
+
+### What to expect
+
+vastar is pre-1.0, built by a small team, used primarily inside our own
+systems. It has unknown bugs. Its parser is strict about HTTP/1.1 and has
+surfaced a few edge cases we did not anticipate. We publish our benchmark
+methodology and honest cross-tool comparisons so you can decide whether
+vastar's tradeoffs fit your use case. See [BENCHMARK.md](BENCHMARK.md) for
+the full matrix (wrk, wrk2, oha, hey, vegeta, k6 vs vastar, across payload
+sizes from 13 B to 500 KB streaming).
+
+If you are researching load generators for a serious evaluation, start
+with `wrk` / `wrk2`. If that pipeline is working for you, there is likely
+no reason to switch.
 
 ```
 $ vastar -n 3000 -c 300 -m POST -T "application/json" \
@@ -65,48 +125,117 @@ Insight:
 
 <img src="docs/assets/vastar-bench-output.png" width="50%" />
 
-## Measurement Comparison
+## Where vastar fits (and where it does not)
 
-|  | vastar | hey | oha |
-|---|---|---|---|
-| Language | Rust (raw TCP) | Go | Rust (hyper) |
-| Binary | **1.2 MB** | 9 MB | 20 MB |
+Summary of [BENCHMARK.md](BENCHMARK.md). Targets are industry-standard
+reference endpoints — `nginx` serving TFB-compliant plaintext/JSON at
+various sizes, plus a Go `net/http` chunked SSE server delivering 50 KB
+to 2 MB streaming responses (chunk count scales with payload). All
+tools tested at c = 500, duration 10 s. Numbers are RPS; higher is
+better.
 
-### Throughput (0B payload, requests/sec)
+### Throughput
 
-| Concurrency | vastar | hey | oha | Factor |
-|---|---|---|---|---|
-| c=1 | 93,192 | 40,942 | 71,750 | vastar 2.3x vs hey |
-| c=10 | 226,650 | 145,607 | 320,712 | oha 1.4x vs vastar |
-| c=200 | 220,311 | 132,650 | 240,421 | oha 1.1x vs vastar |
-| c=500 | 408,117 | 71,695 | 234,676 | vastar 1.7x vs oha |
-| c=1,000 | 536,758 | 106,861 | 18,329 | vastar 5.0x vs hey |
-| c=5,000 | 372,191 | 64,443 | 14,196 | vastar 5.8x vs hey |
-| c=10,000 | 336,700 | 61,427 | 38,141 | vastar 5.5x vs hey |
+`oha` numbers are from `oha` 1.14.0 built from upstream development
+source (streaming-path improvements are ahead of the frozen crates.io
+binary), so the figures below reflect its current state.
 
-### Throughput (100KB payload, requests/sec)
+| Workload               | wrk (gold) | oha        | **vastar** | hey     |
+|------------------------|-----------:|-----------:|-----------:|--------:|
+| Plaintext (13 B)       | **247,053** | 196,454    | 156,206    | 122,936 |
+| JSON 1 KB              | **195,362** | 162,663    | 126,884    | 110,256 |
+| JSON 10 KB             | **158,756** | 134,533    | 106,960    | 96,845  |
+| JSON 100 KB            | **59,064**  | 50,278     | 42,216     | 48,396  |
+| SSE chunked 50 KB      | **52,125**  | 47,619     | 49,176     | 42,128  |
+| SSE chunked 100 KB     | **32,224**  | 27,459     | 30,089     | 26,547  |
+| SSE chunked 500 KB     | **10,050**  |  9,406     |  9,771     |  8,272  |
+| **SSE chunked 1 MB**   | **5,764**   |  5,141     | **5,746** (99.7 %) | 4,635 |
+| SSE chunked 2 MB       | **3,235**   |  2,648     |  3,095 (96 %)    |  2,576 |
 
-| Concurrency | vastar | hey | oha | Factor |
-|---|---|---|---|---|
-| c=1 | 40,406 | 20,927 | 30,982 | vastar 1.9x vs hey |
-| c=10 | 89,683 | 74,310 | 133,387 | oha 1.5x vs vastar |
-| c=100 | 74,229 | 70,411 | 81,466 | oha 1.1x vs vastar |
-| c=200 | 69,080 | 74,962 | 68,332 | hey 1.1x vs vastar |
-| c=500 | 96,809 | 65,999 | 56,798 | vastar 1.5x vs hey |
-| c=1,000 | 89,545 | 57,265 | 18,017 | vastar 1.6x vs hey |
-| c=10,000 | 75,224 | 38,281 | 23,113 | vastar 2.0x vs hey |
+### Tail latency (p99) on large streaming payloads
 
-### Memory (0B payload, Peak RSS)
+| Payload | wrk | oha (⚡) | vastar | hey |
+|---|---:|---:|---:|---:|
+| 50 KB   | 105 ms | 54 ms | **33.6 ms** | 86 ms |
+| 100 KB  | 173 ms | 87 ms | **68.3 ms** | 148 ms |
+| 500 KB  | 487 ms | **152 ms** | 360 ms | 485 ms |
+| 1 MB    | 749 ms | **190 ms** | 1,195 ms | 979 ms |
+| 2 MB    | 1,200 ms | **260 ms** | 2,730 ms | 1,494 ms |
 
-| Concurrency | vastar | hey | oha |
-|---|---|---|---|
-| c=1 | 4 MB | 13 MB | 15 MB |
-| c=1,000 | 32 MB | 80 MB | 41 MB |
-| c=10,000 | 284 MB | 492 MB | 212 MB |
+### Honest interpretation
 
-**Note:** Each tool has different strengths. oha (hyper) excels at c=10-200 with large payloads. hey (Go) is stable across all scenarios. vastar (raw TCP) excels at c=1 and c=500+ where framework overhead matters most. No single tool wins every scenario — choose based on your concurrency range and payload size.
+- **`wrk` remains the throughput leader at all sizes** — decades of C +
+  `epoll` + hand-tuned HTTP parser. On TFB plaintext, vastar reaches
+  ~63 % of `wrk`. `oha` reaches 80 %.
+- **At 1 MB streaming, vastar and `wrk` are effectively tied on RPS**
+  (99.7 %), and vastar's median latency is competitive. This is the
+  niche vastar was built for.
+- **But `oha` is the clear tail-latency winner at 500 KB – 2 MB
+  streaming.** At 1 MB: oha p99 = 181 ms vs vastar 1.2 s (**6.6×
+  better**). At 2 MB: oha 298 ms vs vastar 2.7 s (**9.1× better**). If
+  your SLO is p99-driven rather than RPS-driven at these payload sizes,
+  **`oha` is the better tool** — its `reqwest`/`hyper` stack has
+  sophisticated flow-control and backpressure that vastar's naïve
+  raw-TCP reader does not yet have. We are investigating whether this
+  can be narrowed in future versions.
+- **On tiny payloads (< 100 KB), vastar does not beat any of the
+  industry standards.** The C + `epoll` hot path of `wrk` and the
+  mature `hyper` client of `oha` both have less per-request overhead
+  than our current Rust tokio implementation.
+- **Other tools' niches:** `wrk2` is the reference for
+  coordinated-omission-corrected latency under fixed rate. `vegeta`
+  excels at constant-rate SLO testing with HDR histograms. `k6` has
+  JavaScript scripting and rich observability. Each is a deliberate
+  design with its own strengths.
 
-Throughput alone does not determine accuracy. A faster tool may simply have less per-request overhead, while server-side latency (`resp wait`) remains the same across all tools. See [BENCHMARK.md](BENCHMARK.md) for full methodology, all 4 payload sizes, and analysis.
+### Why we care about big-payload streaming
+
+vastar's design is driven by the load-testing needs of our own
+products:
+
+- **VScore** — a multi-domain scoring engine. One concrete domain is
+  credit scoring in Indonesia, where a single scoring request can
+  legitimately emit a response payload of **30–50 MB** — the full
+  explainable-AI breakdown, feature attribution matrix, regulatory
+  audit trail, and per-component risk decomposition, serialised
+  together. Without streaming, the client blocks for tens of seconds
+  on a single TCP connection; with SSE / NDJSON chunking, the consumer
+  starts processing the first portion within ~50 ms.
+- **VTax** — a tax engine that returns large itemised computations
+  (per-transaction tax lines, adjustment schedules, jurisdictional
+  breakdowns, audit-trail references) as chunked NDJSON streams.
+- **Others** — additional internal services with the same shape:
+  many concurrent long-lived streams, each multi-MB of chunked body.
+
+In all of these cases, during load testing the generator itself must
+hold hundreds of such streams concurrently without becoming the
+bottleneck. That is what vastar is tuned for, and why we chose raw TCP
+over a higher-level HTTP client for this tool.
+
+We recommend vastar for teams whose workload meaningfully resembles
+that shape (SSE, chunked large JSON batches, LLM token streams, bulk
+NDJSON export) and who can tolerate the current tail-latency envelope
+at 1 MB+. For everything else, or when p99 matters more than peak RPS,
+use `oha` or `wrk`.
+
+### Known caveats
+
+- The strict HTTP/1.1 parser is a deliberate choice — it surfaces
+  protocol anomalies (invalid chunk-size hex, malformed status lines,
+  header lines without `:`) that permissive parsers can parse around.
+  Permissive parsers are a valid design choice for real-world clients
+  that need to interoperate with slightly non-conformant servers; we
+  made the other choice because our primary use case is catching bugs
+  in systems we ourselves build. **If you run vastar against the same
+  target as another load generator and see an error-count discrepancy,
+  cross-check with `oha`** — in our experience, when `oha` and vastar
+  agree, the error is almost always real on the server side.
+- Very large payloads (≥ 100 KB non-streaming, single response) show
+  vastar falling behind `hey` in our measurements. We have not yet
+  instrumented this path; if it matters for your workload, run your own
+  comparison and do not rely on our numbers.
+- vastar is pre-1.0. API, output format, and flag semantics may change
+  in minor versions until we reach stability.
 
 ## Features
 
@@ -166,9 +295,65 @@ Options:
       --disable-keepalive    Disable keep-alive
       --disable-compression  Disable compression
       --disable-redirects    Disable redirects
+      --hist-bins <N>        Histogram bucket count [default: 16]
+      --slo-target <SPEC>    Absolute SLO: "p95=100ms,p99=250ms"
   -h, --help                 Print help
   -V, --version              Print version
 ```
+
+### Strict HTTP/1.1 parser (v0.3.0+)
+
+vastar's response parser rejects protocol violations rather than parsing
+around them. The tradeoff is explicit: strict parsing surfaces upstream
+bugs early, at the cost of being less forgiving of non-conformant
+servers. Different tools make this tradeoff differently — neither choice
+is universally better.
+
+- **Invalid chunk-size line** — non-hex digits → error (prior
+  `unwrap_or(0)` fallback in our own code silently truncated streams)
+- **Bad status line format** — must be `HTTP/1.[01] NNN ...` exactly
+- **Malformed header** — line without `:` → error
+- **Invalid `Content-Length`** — non-numeric → error
+- **Chunked terminator violation** — trailer must be empty line
+
+**Credit where it is due.** The strict parser in vastar v0.3.0 exists
+because of `oha`. While profiling a streaming gateway (`vflow_http`) we
+built, `oha` was the only tool in our lineup that consistently reported
+`error reading a body from connection` — other load generators,
+including vastar v0.2.1 at that time, returned 100 % success. The
+discrepancy forced us to `tcpdump` the traffic. The server turned out
+to be emitting a second `HTTP/1.1 200 OK` on the same connection for a
+single request, which `oha`'s `reqwest`/`hyper` parser correctly flagged
+as a protocol violation. Our own tool was parsing around it. Once we
+had the ground truth, we fixed the server bug and then tightened
+vastar's parser to match `oha`'s level of strictness.
+
+We genuinely recommend running `oha` alongside any strict-parsing load
+generator when shaking down a new HTTP server. The Rust `hyper` stack
+underneath is carefully engineered and has caught bugs in our code that
+we would have shipped otherwise.
+
+### Histogram resolution
+
+Default is 11 buckets (SLO-aligned). Use `--hist-bins 32` or `--hist-bins 64`
+for finer tail-latency resolution when investigating outliers.
+
+```bash
+vastar --hist-bins 32 -n 10000 -c 200 http://localhost:8080/api
+```
+
+### Absolute SLO targets
+
+By default, SLO colors (elite/excellent/good/…) are computed from the run's
+own percentile distribution. For CI gates or fleet-wide comparable reporting,
+specify absolute thresholds:
+
+```bash
+vastar --slo-target "p50=20ms,p95=100ms,p99=250ms" \
+  -n 5000 -c 200 http://localhost:8080/api
+```
+
+Missing percentiles fall back to run-relative. Units: `ms` (default) or `s`.
 
 ## Examples
 

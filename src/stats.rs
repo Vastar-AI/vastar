@@ -19,6 +19,7 @@ pub struct BenchResult {
     pub details: PhaseDetails,
 }
 
+#[derive(Clone)]
 pub struct Percentiles {
     pub p10: f64,
     pub p25: f64,
@@ -49,7 +50,23 @@ pub struct PhaseStat {
     pub max: f64,
 }
 
-pub fn aggregate(results: Vec<WorkerResult>, elapsed: Duration, concurrency: usize) -> BenchResult {
+pub fn aggregate(
+    results: Vec<WorkerResult>,
+    elapsed: Duration,
+    concurrency: usize,
+) -> BenchResult {
+    // Default 16 bins — slightly higher than hey/oha (11) for better
+    // tail visibility without cluttering the output. Override per run
+    // via `aggregate_with`.
+    aggregate_with(results, elapsed, concurrency, 16)
+}
+
+pub fn aggregate_with(
+    results: Vec<WorkerResult>,
+    elapsed: Duration,
+    concurrency: usize,
+    hist_bins: usize,
+) -> BenchResult {
     let total_errors: u64 = results.iter().map(|r| r.errors).sum();
     let total_bytes: u64 = results.iter().map(|r| r.bytes_recv).sum();
 
@@ -134,7 +151,7 @@ pub fn aggregate(results: Vec<WorkerResult>, elapsed: Duration, concurrency: usi
         p999: pctl_fine(9990), p9999: pctl_fine(9999),
     };
 
-    let histogram = build_histogram(&all_latencies, min_lat, max_lat, n);
+    let histogram = build_histogram(&all_latencies, min_lat, max_lat, n, hist_bins);
     let rps = total_requests as f64 / elapsed.as_secs_f64();
 
     BenchResult {
@@ -145,8 +162,8 @@ pub fn aggregate(results: Vec<WorkerResult>, elapsed: Duration, concurrency: usi
     }
 }
 
-fn build_histogram(sorted: &[u64], min_lat: f64, max_lat: f64, n: usize) -> Vec<HistBucket> {
-    let num_buckets = 11;
+fn build_histogram(sorted: &[u64], min_lat: f64, max_lat: f64, n: usize, num_buckets: usize) -> Vec<HistBucket> {
+    let num_buckets = num_buckets.max(1);
     let range = max_lat - min_lat;
 
     if range <= 0.0 {

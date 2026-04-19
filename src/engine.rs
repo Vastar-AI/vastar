@@ -432,10 +432,22 @@ async fn read_response_timed(
     if n == 0 { return Err(()); }
     let wait_ns = tw.elapsed().as_nanos() as u64;
 
-    // Phase 2: parse status line + remaining headers
+    // Phase 2: parse status line + remaining headers (strict)
+    //
+    // Status line layout (HTTP/1.1 200 OK):
+    //   H T T P / 1 . 1 SP 2 0 0 SP O K \r \n
+    //   0 1 2 3 4 5 6 7 8  9 10 11 12 ...
     let tr = Instant::now();
-    if line_buf.len() < 12 { return Err(()); }
-    let status: u16 = std::str::from_utf8(&line_buf[9..12])
+    if line_buf.len() < 13 || !line_buf.starts_with(b"HTTP/1.") {
+        return Err(());
+    }
+    // Minor version at index 7 must be '0' or '1'
+    if !(line_buf[7] == b'0' || line_buf[7] == b'1') { return Err(()); }
+    if line_buf[8] != b' ' { return Err(()); }
+    // Status code: 3 ASCII digits at positions 9..12
+    let status_bytes = &line_buf[9..12];
+    if !status_bytes.iter().all(|b| b.is_ascii_digit()) { return Err(()); }
+    let status: u16 = std::str::from_utf8(status_bytes)
         .map_err(|_| ())?
         .parse()
         .map_err(|_| ())?;
@@ -447,16 +459,17 @@ async fn read_response_timed(
         line_buf.clear();
         let n = reader.read_until(b'\n', &mut line_buf).await.map_err(|_| ())?;
         if n == 0 { return Err(()); }
-        // Empty line (just CRLF or LF) marks end of headers.
         if line_buf.as_slice() == b"\r\n" || line_buf.as_slice() == b"\n" {
             break;
         }
         let line = line_buf.as_slice();
+        // Strict: header lines must contain a colon.
+        if !line.contains(&b':') { return Err(()); }
         if line.len() > 16 && starts_with_ci(line, b"content-length:") {
-            let val = std::str::from_utf8(&line[15..]).unwrap_or("").trim();
-            content_length = val.parse().ok();
+            let val = std::str::from_utf8(&line[15..]).map_err(|_| ())?.trim();
+            content_length = Some(val.parse().map_err(|_| ())?);
         } else if line.len() > 19 && starts_with_ci(line, b"transfer-encoding:") {
-            let val = std::str::from_utf8(&line[18..]).unwrap_or("").trim();
+            let val = std::str::from_utf8(&line[18..]).map_err(|_| ())?.trim();
             if val.eq_ignore_ascii_case("chunked") {
                 is_chunked = true;
             }
@@ -508,31 +521,43 @@ async fn drain_chunked(reader: &mut BufReader<TcpStream>) -> Result<u64, ()> {
     loop {
         let chunk_size = read_chunk_size(reader).await?;
         if chunk_size == 0 {
-            skip_line(reader).await?;
+            // Final chunk — consume empty trailer line (CRLF or just LF).
+            // Strict: must be exactly an empty line; any other content is a
+            // protocol violation (we don't support HTTP/1.1 trailers).
+            let mut trailer = Vec::with_capacity(8);
+            let n = reader.read_until(b'\n', &mut trailer).await.map_err(|_| ())?;
+            if n == 0 { return Err(()); }
+            if trailer.as_slice() != b"\r\n" && trailer.as_slice() != b"\n" {
+                return Err(());
+            }
             break;
         }
         total += chunk_size as u64;
-        drain_exact(reader, chunk_size + 2).await?; // +2 for trailing \r\n
+        drain_exact(reader, chunk_size + 2).await?; // body + trailing CRLF
     }
     Ok(total)
 }
 
 async fn read_chunk_size(reader: &mut BufReader<TcpStream>) -> Result<usize, ()> {
-    // Use read_until to correctly handle chunk-size lines that span TCP
-    // packet / BufReader refill boundaries. Prior impl consumed partial
-    // digits and returned 0, causing spurious "last chunk" termination.
+    // STRICT: returns Err on non-hex chunk size line. The old `unwrap_or(0)`
+    // fallback silently treated corruption as "last chunk", masking upstream
+    // protocol bugs (e.g., a stray `HTTP/1.1 200 OK` inside the body).
     let mut line = Vec::with_capacity(32);
     let n = reader.read_until(b'\n', &mut line).await.map_err(|_| ())?;
     if n == 0 { return Err(()); }
-    let hex = std::str::from_utf8(&line)
-        .unwrap_or("0")
+    let hex_str = std::str::from_utf8(&line)
+        .map_err(|_| ())?
         .trim_matches(|c: char| c == '\r' || c == '\n' || c == ' ')
-        .split(';')
+        .split(';')  // allow chunk extensions
         .next()
-        .unwrap_or("0");
-    Ok(usize::from_str_radix(hex, 16).unwrap_or(0))
+        .ok_or(())?;
+    if hex_str.is_empty() { return Err(()); }
+    // Must be pure hex digits, nothing else.
+    if !hex_str.bytes().all(|b| b.is_ascii_hexdigit()) { return Err(()); }
+    usize::from_str_radix(hex_str, 16).map_err(|_| ())
 }
 
+#[allow(dead_code)]
 async fn skip_line(reader: &mut BufReader<TcpStream>) -> Result<(), ()> {
     let mut sink = Vec::with_capacity(8);
     reader.read_until(b'\n', &mut sink).await.map_err(|_| ())?;

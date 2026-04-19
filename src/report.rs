@@ -137,9 +137,76 @@ pub async fn render_progress(
     let _ = std::io::stderr().flush();
 }
 
-/// Print final benchmark report to stdout.
+/// Absolute-latency SLO override. Seconds (float).
+/// Keys are p50/p75/p90/p95/p99/p999 — any missing falls back to run-relative.
+#[derive(Default, Debug, Clone)]
+pub struct SloTarget {
+    pub p50: Option<f64>,
+    pub p75: Option<f64>,
+    pub p90: Option<f64>,
+    pub p95: Option<f64>,
+    pub p99: Option<f64>,
+    pub p999: Option<f64>,
+}
+
+/// Parse "p50=20ms,p95=100ms,p99=250ms" into SloTarget.
+/// Accepts units: ms, s (default: ms).
+pub fn parse_slo_target(s: &str) -> Option<SloTarget> {
+    let mut t = SloTarget::default();
+    for pair in s.split(',') {
+        let (key, val) = pair.split_once('=')?;
+        let key = key.trim().to_ascii_lowercase();
+        let val = val.trim();
+        let (num_str, unit) = if let Some(n) = val.strip_suffix("ms") {
+            (n, "ms")
+        } else if let Some(n) = val.strip_suffix('s') {
+            (n, "s")
+        } else {
+            (val, "ms")
+        };
+        let v: f64 = num_str.parse().ok()?;
+        let secs = if unit == "s" { v } else { v / 1000.0 };
+        match key.as_str() {
+            "p50" => t.p50 = Some(secs),
+            "p75" => t.p75 = Some(secs),
+            "p90" => t.p90 = Some(secs),
+            "p95" => t.p95 = Some(secs),
+            "p99" => t.p99 = Some(secs),
+            "p999" | "p99.9" => t.p999 = Some(secs),
+            _ => return None,
+        }
+    }
+    Some(t)
+}
+
+/// Print final benchmark report (run-relative SLO).
+#[allow(dead_code)]
 pub fn print_report(r: &BenchResult) {
+    print_report_with_slo(r, None)
+}
+
+/// Apply absolute-SLO overrides onto observed percentiles.
+/// Returned struct is what SLO coloring + legend see.
+fn effective_percentiles(run: &Percentiles, slo: Option<&SloTarget>) -> Percentiles {
+    let Some(slo) = slo else { return run.clone(); };
+    Percentiles {
+        p10: run.p10,
+        p25: run.p25,
+        p50: slo.p50.unwrap_or(run.p50),
+        p75: slo.p75.unwrap_or(run.p75),
+        p90: slo.p90.unwrap_or(run.p90),
+        p95: slo.p95.unwrap_or(run.p95),
+        p99: slo.p99.unwrap_or(run.p99),
+        p999: slo.p999.unwrap_or(run.p999),
+        p9999: run.p9999,
+    }
+}
+
+/// Print final benchmark report with optional absolute SLO override.
+pub fn print_report_with_slo(r: &BenchResult, slo: Option<&SloTarget>) {
     let successful = r.total_requests as u64 - r.total_errors;
+    let eff_pct = effective_percentiles(&r.percentiles, slo);
+    let slo_mode = if slo.is_some() { "absolute" } else { "run-relative" };
 
     println!();
     println!("Summary:");
@@ -191,7 +258,7 @@ pub fn print_report(r: &BenchResult) {
     ];
     for (pct, val, key) in pcts {
         if use_color {
-            let (color, _) = slo_color(*val, &r.percentiles);
+            let (color, _) = slo_color(*val, &eff_pct);
             if *key {
                 println!("  {} in {}{:.4}{} secs  ({}{:.2}ms{})", pct, color, val, RESET, color, val * 1000.0, RESET);
             } else {
@@ -206,17 +273,21 @@ pub fn print_report(r: &BenchResult) {
 
     println!();
 
-    // Histogram — 11-level SLO color gradient
+    // Histogram — color gradient scales with bucket count.
+    // Uses an ANSI 256-color cube interpolation (green→yellow→red) so
+    // each of the N buckets gets a visually distinct shade. SLO legend
+    // below stays on the semantic 11-level palette.
     if !r.histogram.is_empty() {
         let use_color = std::io::IsTerminal::is_terminal(&std::io::stdout());
         println!("Response time histogram:");
         println!();
         let max_count = r.histogram.iter().map(|b| b.count).max().unwrap_or(1).max(1);
         let bar_max = 48;
-        for bucket in &r.histogram {
+        let total_bins = r.histogram.len();
+        for (idx, bucket) in r.histogram.iter().enumerate() {
             let bar_len = bucket.count * bar_max / max_count;
             if use_color {
-                let (color, _) = slo_color(bucket.mark, &r.percentiles);
+                let color = hist_gradient_color(idx, total_bins);
                 let bar = "\u{25A0}".repeat(bar_len);
                 println!("  {:.4} [{}]\t{}{}{}", bucket.mark, bucket.count, color, bar, RESET);
             } else {
@@ -226,7 +297,7 @@ pub fn print_report(r: &BenchResult) {
         }
         if use_color {
             println!();
-            print_slo_legend(&r.percentiles);
+            print_slo_legend(&eff_pct, slo_mode);
         }
         println!();
     }
@@ -252,9 +323,35 @@ pub fn print_report(r: &BenchResult) {
     // Details (like hey)
     print_details(&r.details);
 
-    // Errors
-    if r.total_errors > 0 {
-        println!("Errors: {} total", r.total_errors);
+    // Error distribution — always emit (machine-readable, stable for CI).
+    // Pre-v0.3, zero-error runs omitted this section, forcing downstream
+    // parsers to branch.
+    println!("Error distribution:");
+    let non_2xx_total: usize = r.status_dist.iter()
+        .filter(|(k, _)| **k < 200 || **k >= 300)
+        .map(|(_, v)| *v)
+        .sum();
+    let transport_errs = r.total_errors as usize;
+    if transport_errs == 0 && non_2xx_total == 0 {
+        println!("  [transport] 0");
+        println!("  [non-2xx]   0");
+    } else {
+        println!("  [transport] {}", transport_errs);
+        if non_2xx_total > 0 {
+            let mut codes: Vec<_> = r.status_dist.iter()
+                .filter(|(k, _)| **k < 200 || **k >= 300)
+                .collect();
+            codes.sort_by_key(|(k, _)| **k);
+            for (code, count) in codes {
+                println!("  [{}]       {}", code, count);
+            }
+        } else {
+            println!("  [non-2xx]   0");
+        }
+    }
+    println!();
+    if transport_errs > 0 {
+        println!("Errors: {} total", transport_errs);
         println!();
     }
 
@@ -461,6 +558,32 @@ const SLO_LEVELS: [(&str, &str); 11] = [
     ("\x1b[38;5;88m",  "violation"),   //  (2,0,0) dark red
 ];
 
+/// Gradient color for histogram bucket at index `idx` out of `total` buckets.
+/// Traces green → yellow → red through the ANSI 256-color cube so every
+/// bucket position gets a visually distinct shade — independent of the
+/// 11-level SLO palette (which stays reserved for percentile/SLO semantics).
+///
+/// Path:  (0,5,0) green  →  (5,5,0) yellow  →  (5,0,0) red
+/// ANSI 256-color: 16 + 36*r + 6*g + b  (r,g,b ∈ 0..=5)
+fn hist_gradient_color(idx: usize, total: usize) -> String {
+    let fraction = if total <= 1 {
+        0.0
+    } else {
+        idx as f64 / (total - 1) as f64
+    };
+    let (r, g) = if fraction <= 0.5 {
+        // green (0,5,0) → yellow (5,5,0): ramp red channel 0→5
+        let t = fraction * 2.0;
+        ((t * 5.0).round() as u8, 5u8)
+    } else {
+        // yellow (5,5,0) → red (5,0,0): ramp green channel 5→0
+        let t = (fraction - 0.5) * 2.0;
+        (5u8, ((1.0 - t) * 5.0).round() as u8)
+    };
+    let code = 16 + 36 * r + 6 * g;
+    format!("\x1b[38;5;{}m", code)
+}
+
 fn slo_color(latency: f64, p: &Percentiles) -> (&'static str, &'static str) {
     let level = if latency <= p.p25 * 0.5 {
         0
@@ -488,7 +611,7 @@ fn slo_color(latency: f64, p: &Percentiles) -> (&'static str, &'static str) {
     (SLO_LEVELS[level].0, SLO_LEVELS[level].1)
 }
 
-fn print_slo_legend(p: &Percentiles) {
+fn print_slo_legend(p: &Percentiles, mode: &str) {
     let fmt_ms = |v: f64| -> String {
         let ms = v * 1000.0;
         if ms < 1.0 { format!("{:.2}ms", ms) }
@@ -527,8 +650,12 @@ fn print_slo_legend(p: &Percentiles) {
         }
         println!();
     }
-    println!("  \x1b[38;5;242mNote: SLO levels are relative to this run's own percentile distribution,\x1b[0m");
-    println!("  \x1b[38;5;242mnot absolute latency thresholds. Define custom SLO targets per your system.\x1b[0m");
+    if mode == "absolute" {
+        println!("  \x1b[38;5;242mNote: SLO levels use --slo-target absolute thresholds.\x1b[0m");
+    } else {
+        println!("  \x1b[38;5;242mNote: SLO levels are relative to this run's own percentile distribution,\x1b[0m");
+        println!("  \x1b[38;5;242mnot absolute latency thresholds. Override via --slo-target p95=100ms,p99=250ms.\x1b[0m");
+    }
 }
 
 fn strip_ansi_len(s: &str) -> usize {

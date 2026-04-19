@@ -85,6 +85,19 @@ struct Cli {
     #[arg(long)]
     disable_redirects: bool,
 
+    /// Histogram bucket count for latency distribution (default: 16).
+    /// vastar's default is higher than hey/oha (both default 11) to give
+    /// better tail visibility out of the box. Use 32 or 64 for outlier
+    /// investigation; 11 to match hey/oha output layout.
+    #[arg(long = "hist-bins", default_value = "16")]
+    hist_bins: usize,
+
+    /// Absolute SLO target — format: "p50=20ms,p95=100ms,p99=250ms".
+    /// When set, the SLO legend uses these thresholds instead of
+    /// run-relative percentiles. Useful for CI gates.
+    #[arg(long = "slo-target")]
+    slo_target: Option<String>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -201,8 +214,9 @@ async fn main() {
     };
 
     let (results, elapsed) = engine::run(config).await;
-    let bench_result = stats::aggregate(results, elapsed, cli.concurrency);
-    report::print_report(&bench_result);
+    let bench_result = stats::aggregate_with(results, elapsed, cli.concurrency, cli.hist_bins);
+    let slo_override = cli.slo_target.as_deref().and_then(report::parse_slo_target);
+    report::print_report_with_slo(&bench_result, slo_override.as_ref());
 
     // Silence dead-code warnings for flags not yet wired through.
     let _ = cli.output;
