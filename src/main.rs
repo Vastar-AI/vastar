@@ -165,7 +165,7 @@ async fn main() {
     // Build headers
     let mut headers: Vec<(String, String)> = Vec::new();
     headers.push(("content-type".into(), cli.content_type.clone()));
-    headers.push(("user-agent".into(), "vastar/0.1.0".into()));
+    headers.push(("user-agent".into(), concat!("vastar/", env!("CARGO_PKG_VERSION")).into()));
 
     if let Some(ref accept) = cli.accept {
         headers.push(("accept".into(), accept.clone()));
