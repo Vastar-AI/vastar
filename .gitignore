@@ -1,2 +1,6 @@
 /target
 **/target/
+
+# Internal notes — not tracked
+/nogittrack/
+nogittrack/

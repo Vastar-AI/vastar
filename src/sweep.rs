@@ -752,8 +752,9 @@ async fn run_engine_multi(
             timeout: Duration::from_secs(args.timeout),
             qps: 0.0,
             disable_keepalive: args.disable_keepalive,
+            drain_cap: Duration::from_secs(2),
         };
-        let (results, elapsed) = engine::run(cfg).await;
+        let (results, elapsed, _drain_duration) = engine::run(cfg).await;
         let bench = stats::aggregate(results, elapsed, concurrency);
         samples.push(bench);
         tokio::time::sleep(Duration::from_millis(200)).await;

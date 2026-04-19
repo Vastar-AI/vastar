@@ -7,6 +7,13 @@ pub struct BenchResult {
     pub total_duration: Duration,
     pub total_requests: usize,
     pub total_errors: u64,
+    /// Requests that were in-flight when drain_cap expired past the
+    /// duration deadline. Counted separately from transport errors.
+    /// Always 0 outside duration mode.
+    pub total_drain_aborted: u64,
+    /// Time spent past the user-requested duration, draining in-flight
+    /// requests. `Some(d)` in duration mode, `None` in n-based mode.
+    pub drain_duration: Option<Duration>,
     pub total_bytes: u64,
     pub rps: f64,
     pub avg_latency: f64,
@@ -58,16 +65,18 @@ pub fn aggregate(
     // Default 16 bins — slightly higher than hey/oha (11) for better
     // tail visibility without cluttering the output. Override per run
     // via `aggregate_with`.
-    aggregate_with(results, elapsed, concurrency, 16)
+    aggregate_with(results, elapsed, None, concurrency, 16)
 }
 
 pub fn aggregate_with(
     results: Vec<WorkerResult>,
     elapsed: Duration,
+    drain_duration: Option<Duration>,
     concurrency: usize,
     hist_bins: usize,
 ) -> BenchResult {
     let total_errors: u64 = results.iter().map(|r| r.errors).sum();
+    let total_drain_aborted: u64 = results.iter().map(|r| r.drain_aborted).sum();
     let total_bytes: u64 = results.iter().map(|r| r.bytes_recv).sum();
 
     let cap: usize = results.iter().map(|r| r.latencies.len()).sum();
@@ -93,7 +102,7 @@ pub fn aggregate_with(
         }
     }
 
-    let total_requests = all_latencies.len() + total_errors as usize;
+    let total_requests = all_latencies.len() + total_errors as usize + total_drain_aborted as usize;
 
     let ns = |v: u64| v as f64 / 1_000_000_000.0;
     let phase_avg = |sum: u64| if phase_count > 0 { ns(sum / phase_count) } else { 0.0 };
@@ -110,6 +119,8 @@ pub fn aggregate_with(
             total_duration: elapsed,
             total_requests,
             total_errors,
+            total_drain_aborted,
+            drain_duration,
             total_bytes,
             rps: 0.0,
             avg_latency: 0.0,
@@ -156,7 +167,7 @@ pub fn aggregate_with(
 
     BenchResult {
         total_duration: elapsed,
-        total_requests, total_errors, total_bytes,
+        total_requests, total_errors, total_drain_aborted, drain_duration, total_bytes,
         rps, avg_latency: avg_lat, min_latency: min_lat, max_latency: max_lat,
         concurrency, percentiles, histogram, status_dist, details,
     }

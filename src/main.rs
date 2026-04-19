@@ -98,6 +98,14 @@ struct Cli {
     #[arg(long = "slo-target")]
     slo_target: Option<String>,
 
+    /// Maximum time to drain in-flight requests after the duration
+    /// deadline fires (e.g. 500ms, 2s, 5s). Default 2s. Requests still
+    /// in flight past this cap are aborted and counted as
+    /// [drain-aborted] instead of extending elapsed time. Only applies
+    /// in duration mode (-z).
+    #[arg(long = "drain-cap", default_value = "2s")]
+    drain_cap: String,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -110,7 +118,9 @@ enum Command {
 
 fn parse_duration(s: &str) -> Duration {
     let s = s.trim();
-    if let Some(v) = s.strip_suffix('s') {
+    if let Some(v) = s.strip_suffix("ms") {
+        Duration::from_secs_f64(v.parse::<f64>().expect("invalid duration") / 1000.0)
+    } else if let Some(v) = s.strip_suffix('s') {
         Duration::from_secs_f64(v.parse().expect("invalid duration"))
     } else if let Some(v) = s.strip_suffix('m') {
         Duration::from_secs(v.parse::<u64>().expect("invalid duration") * 60)
@@ -211,10 +221,11 @@ async fn main() {
         timeout: Duration::from_secs(cli.timeout),
         qps: cli.qps,
         disable_keepalive: cli.disable_keepalive,
+        drain_cap: parse_duration(&cli.drain_cap),
     };
 
-    let (results, elapsed) = engine::run(config).await;
-    let bench_result = stats::aggregate_with(results, elapsed, cli.concurrency, cli.hist_bins);
+    let (results, elapsed, drain_duration) = engine::run(config).await;
+    let bench_result = stats::aggregate_with(results, elapsed, drain_duration, cli.concurrency, cli.hist_bins);
     let slo_override = cli.slo_target.as_deref().and_then(report::parse_slo_target);
     report::print_report_with_slo(&bench_result, slo_override.as_ref());
 

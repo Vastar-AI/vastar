@@ -20,6 +20,11 @@ pub struct BenchConfig {
     #[allow(dead_code)]
     pub qps: f64,
     pub disable_keepalive: bool,
+    /// Maximum time workers may spend draining in-flight requests
+    /// after the duration deadline fires. After this cap, remaining
+    /// in-flight requests are aborted and counted as drain-aborted.
+    /// Default 2s. Only applies in duration mode.
+    pub drain_cap: Duration,
 }
 
 pub struct Progress {
@@ -42,6 +47,10 @@ pub struct WorkerResult {
     pub latencies: Vec<u64>,
     pub status_codes: Vec<u16>,
     pub errors: u64,
+    /// Requests in-flight when drain-cap deadline hit. These were sent
+    /// on the wire but never got a complete response before we gave up
+    /// waiting. Counted separately from transport errors.
+    pub drain_aborted: u64,
     pub bytes_recv: u64,
     // Phase timing accumulators (sum/min/max in nanoseconds)
     pub write: PhaseAcc,
@@ -135,7 +144,7 @@ fn build_raw_request(
 // Coordinator
 // ---------------------------------------------------------------------------
 
-pub async fn run(config: BenchConfig) -> (Vec<WorkerResult>, Duration) {
+pub async fn run(config: BenchConfig) -> (Vec<WorkerResult>, Duration, Option<Duration>) {
     let progress = Arc::new(Progress::new());
     let stop = Arc::new(AtomicBool::new(false));
     let is_duration_mode = config.duration.is_some();
@@ -146,14 +155,6 @@ pub async fn run(config: BenchConfig) -> (Vec<WorkerResult>, Duration) {
     let render_handle = tokio::spawn(async move {
         crate::report::render_progress(prog, total_display, is_duration_mode, stop_r).await;
     });
-
-    if let Some(dur) = config.duration {
-        let s = stop.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(dur).await;
-            s.store(true, Ordering::Release);
-        });
-    }
 
     let (host, port, path) = parse_url(&config.uri);
     let addr: SocketAddr = tokio::net::lookup_host(format!("{}:{}", host, port))
@@ -235,9 +236,10 @@ pub async fn run(config: BenchConfig) -> (Vec<WorkerResult>, Duration) {
         return (vec![WorkerResult {
             latencies: vec![], status_codes: vec![],
             errors: connect_failures,
+            drain_aborted: 0,
             bytes_recv: 0,
             write: PhaseAcc::new(), wait: PhaseAcc::new(), read: PhaseAcc::new(),
-        }], Duration::ZERO);
+        }], Duration::ZERO, None);
     }
 
     // Distribute connections round-robin to workers
@@ -252,6 +254,27 @@ pub async fn run(config: BenchConfig) -> (Vec<WorkerResult>, Duration) {
     let reqs_extra = if is_duration_mode { 0 } else { total_reqs % num_workers };
 
     let start = Instant::now();
+
+    // Fix A: spawn deadline timer AFTER `start` so pre-connect time
+    // doesn't eat into the work window. Previously the timer started
+    // during URL parsing / DNS / pre-connect, which at high concurrency
+    // cost 5-10% of the user-requested duration.
+    //
+    // Fix C: compute drain_deadline = start + duration + drain_cap.
+    // Workers racing in-flight requests against this deadline can
+    // abort if a slow request would otherwise hijack elapsed time
+    // past the user's expectation.
+    let drain_deadline: Option<Instant> = if let Some(dur) = config.duration {
+        let s = stop.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(dur).await;
+            s.store(true, Ordering::Release);
+        });
+        Some(start + dur + config.drain_cap)
+    } else {
+        None
+    };
+
     let mut handles = Vec::with_capacity(num_workers);
 
     for i in 0..num_workers {
@@ -269,7 +292,7 @@ pub async fn run(config: BenchConfig) -> (Vec<WorkerResult>, Duration) {
         let keepalive = !config.disable_keepalive;
 
         handles.push(tokio::spawn(async move {
-            core_worker(addr, rb, conns, nr, timeout, progress, stop, keepalive).await
+            core_worker(addr, rb, conns, nr, timeout, progress, stop, keepalive, drain_deadline).await
         }));
     }
 
@@ -283,7 +306,12 @@ pub async fn run(config: BenchConfig) -> (Vec<WorkerResult>, Duration) {
     tokio::time::sleep(Duration::from_millis(150)).await;
     let _ = render_handle.abort();
 
-    (results, elapsed)
+    // Fix B: drain_duration = time spent past the deadline. In duration
+    // mode this is elapsed - config.duration (clamped to zero). Callers
+    // can use this to report "drain after deadline: Xms".
+    let drain_duration = config.duration.map(|d| elapsed.saturating_sub(d));
+
+    (results, elapsed, drain_duration)
 }
 
 // ---------------------------------------------------------------------------
@@ -299,11 +327,13 @@ async fn core_worker(
     progress: Arc<Progress>,
     stop: Arc<AtomicBool>,
     keepalive: bool,
+    drain_deadline: Option<Instant>,
 ) -> WorkerResult {
     let cap = num_requests.min(100_000);
     let mut latencies = Vec::with_capacity(cap);
     let mut status_codes = Vec::with_capacity(cap);
     let mut errors = 0u64;
+    let mut drain_aborted = 0u64;
     let mut bytes_recv = 0u64;
     let mut requests_sent = 0usize;
     let mut write_acc = PhaseAcc::new();
@@ -325,7 +355,43 @@ async fn core_worker(
     // Event loop: as each request completes, send next on same connection.
     // FuturesUnordered polls all in-flight futures within THIS single task —
     // tokio scheduler only sees 1 task, not num_conns tasks.
-    while let Some((conn_opt, result)) = in_flight.next().await {
+    //
+    // Fix C: after `stop` fires, we're in "drain phase". The current
+    // request is allowed to complete, but if it (or any subsequent
+    // in-flight request) would push elapsed past drain_deadline, we
+    // abort the remaining in-flight and count them as drain_aborted.
+    // This bounds the overshoot to `drain_cap` (default 2s) even when
+    // a single slow request sits on the wire for the full `timeout`.
+    loop {
+        let in_drain_phase = stop.load(Ordering::Relaxed);
+
+        let next_item = if in_drain_phase {
+            if let Some(dd) = drain_deadline {
+                let remaining = dd.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    drain_aborted = in_flight.len() as u64;
+                    break;
+                }
+                tokio::select! {
+                    biased;
+                    r = in_flight.next() => r,
+                    _ = tokio::time::sleep(remaining) => {
+                        drain_aborted = in_flight.len() as u64;
+                        break;
+                    }
+                }
+            } else {
+                in_flight.next().await
+            }
+        } else {
+            in_flight.next().await
+        };
+
+        let (conn_opt, result) = match next_item {
+            Some(x) => x,
+            None => break, // in_flight drained naturally
+        };
+
         match result {
             Ok((status, size, latency_ns, timings)) => {
                 latencies.push(latency_ns);
@@ -342,8 +408,12 @@ async fn core_worker(
         }
         progress.completed.fetch_add(1, Ordering::Relaxed);
 
-        if stop.load(Ordering::Relaxed) {
-            break;
+        // After stop is set, keep draining existing in-flight but
+        // don't push new requests. Previous code broke here, which
+        // meant the worker's remaining in-flight futures were
+        // silently dropped without accounting — Fix B surfaces that.
+        if in_drain_phase {
+            continue;
         }
 
         // Send next request, reusing connection if available
@@ -356,7 +426,7 @@ async fn core_worker(
     }
 
     WorkerResult {
-        latencies, status_codes, errors, bytes_recv,
+        latencies, status_codes, errors, drain_aborted, bytes_recv,
         write: write_acc, wait: wait_acc, read: read_acc,
     }
 }

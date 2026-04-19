@@ -212,6 +212,16 @@ pub fn print_report_with_slo(r: &BenchResult, slo: Option<&SloTarget>) {
     println!("Summary:");
     println!();
     println!("  Total:        {:.4} secs", r.total_duration.as_secs_f64());
+    // Surface drain-past-deadline time in duration mode. A healthy run
+    // with a well-behaved server shows drain < 100ms. Large drain =
+    // server had slow tail at deadline; near drain_cap = drain_cap
+    // hit and in-flight were aborted (see [drain-aborted] below).
+    if let Some(d) = r.drain_duration {
+        let ms = d.as_secs_f64() * 1000.0;
+        if ms >= 1.0 {
+            println!("  Drain:        {:.0} ms past deadline", ms);
+        }
+    }
     if successful == 0 {
         println!("  Requests/sec: 0.00");
         if r.total_errors > 0 {
@@ -332,22 +342,25 @@ pub fn print_report_with_slo(r: &BenchResult, slo: Option<&SloTarget>) {
         .map(|(_, v)| *v)
         .sum();
     let transport_errs = r.total_errors as usize;
-    if transport_errs == 0 && non_2xx_total == 0 {
-        println!("  [transport] 0");
-        println!("  [non-2xx]   0");
+    let drain_aborted = r.total_drain_aborted as usize;
+    if transport_errs == 0 && non_2xx_total == 0 && drain_aborted == 0 {
+        println!("  [transport]     0");
+        println!("  [non-2xx]       0");
+        println!("  [drain-aborted] 0");
     } else {
-        println!("  [transport] {}", transport_errs);
+        println!("  [transport]     {}", transport_errs);
         if non_2xx_total > 0 {
             let mut codes: Vec<_> = r.status_dist.iter()
                 .filter(|(k, _)| **k < 200 || **k >= 300)
                 .collect();
             codes.sort_by_key(|(k, _)| **k);
             for (code, count) in codes {
-                println!("  [{}]       {}", code, count);
+                println!("  [{}]           {}", code, count);
             }
         } else {
-            println!("  [non-2xx]   0");
+            println!("  [non-2xx]       0");
         }
+        println!("  [drain-aborted] {}", drain_aborted);
     }
     println!();
     if transport_errs > 0 {
