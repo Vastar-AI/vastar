@@ -301,13 +301,20 @@ Options:
   -V, --version              Print version
 ```
 
-### Strict HTTP/1.1 parser (v0.3.0+)
+### Strict HTTP/1.1 parser (v0.3.0+) — learned from `oha`
 
-vastar's response parser rejects protocol violations rather than parsing
-around them. The tradeoff is explicit: strict parsing surfaces upstream
-bugs early, at the cost of being less forgiving of non-conformant
-servers. Different tools make this tradeoff differently — neither choice
-is universally better.
+We learned this from `oha`. Before v0.3.0, vastar's parser was
+permissive and silently parsed around protocol violations that `oha`
+correctly rejected. After watching `oha` flag a real upstream bug that
+our tool missed, we studied how its `reqwest`/`hyper` stack validates
+responses and tightened vastar's parser to match that level of rigour.
+The detailed story is in the "Credit where it is due" note below.
+
+vastar's response parser now rejects protocol violations rather than
+parsing around them. The tradeoff is explicit: strict parsing surfaces
+upstream bugs early, at the cost of being less forgiving of
+non-conformant servers. Different tools make this tradeoff differently
+— neither choice is universally better.
 
 - **Invalid chunk-size line** — non-hex digits → error (prior
   `unwrap_or(0)` fallback in our own code silently truncated streams)
