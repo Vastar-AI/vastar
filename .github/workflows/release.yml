@@ -13,8 +13,28 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  create-release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Create the release up front so matrix build jobs don't race
+      # on first-write. Without this, N parallel builds all try to
+      # create-or-update the same release simultaneously and the losers
+      # fail with a 422, cascade-cancelling the rest of the matrix.
+      - name: Create release (empty)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+
   build:
     name: Build ${{ matrix.target }}
+    needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
