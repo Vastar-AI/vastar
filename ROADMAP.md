@@ -27,6 +27,7 @@ benchmarks exposed. These are listed ahead of any new-protocol work.
 | `-H` does not override `-T` default | `-H "Content-Type: application/json"` adds a second header instead of overriding the default; some servers pick wrong one → 400. | Use `-T` instead of overriding via `-H`. | open |
 | p99 tail degradation at ≥ 1 MB streaming | vastar matches or beats `wrk` on throughput at 1 – 2 MB chunked streaming, but p99 blows out (1.2 s at 1 MB, 2.7 s at 2 MB) compared to `oha` (190 ms, 260 ms). Likely root cause: BufReader capacity (32 KB), lack of flow control, per-chunk `Bytes::copy_from_slice` allocation. | None; for p99-sensitive 1 MB+ streaming, `oha` is currently a better choice. | open |
 | 100 KB non-streaming regression vs `hey` | At 100 KB `Content-Length` responses, vastar's throughput falls behind `hey`. Likely the same reader path as above. | Use `oha` or `hey` for this workload size. | open |
+| Duration-mode deadline behavior (3 gaps) | (A) Pre-connect time ate into the requested duration window (5-10% skew at high c); (B) drain time past the deadline had no accounting; (C) a single slow in-flight request could hijack elapsed up to `timeout` (30s default). | — | **fixed (post-v0.3.0)** — Timer now starts after pre-connect; `Drain: Xms past deadline` surfaced in report; new `--drain-cap` flag (default 2s) bounds overshoot and counts aborted in-flight as `[drain-aborted]`. Matches `oha`'s reporting shape. |
 
 ### Missing HTTP features
 
